@@ -1,1 +1,1 @@
-基于大模型语义加权的联邦时空预测 (LLM-Semantic-Weighted Federated Spatio-Temporal Forecasting)
+联邦时空语言模型 (Federated Spatio-Temporal Language Model - FST-LM)
