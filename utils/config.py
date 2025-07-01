@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-配置参数管理模块
+配置参数管理模块 - 添加LoRA支持
 """
 import argparse
 import os
@@ -32,7 +32,7 @@ def get_args():
     # === 联邦学习参数 ===
     parser.add_argument('--num_clients', type=int, default=50,
                         help='参与联邦学习的基站数量')
-    parser.add_argument('--frac', type=float, default=0.3,
+    parser.add_argument('--frac', type=float, default=0.1,
                         help='每轮参与训练的客户端比例')
     parser.add_argument('--rounds', type=int, default=100,
                         help='联邦学习轮数')
@@ -51,6 +51,19 @@ def get_args():
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout概率')
 
+    # === LoRA参数 ===
+    parser.add_argument('--use_lora', action='store_true',
+                        help='是否使用LoRA进行参数高效微调')
+    parser.add_argument('--lora_rank', type=int, default=16,
+                        help='LoRA秩 (r参数，控制适应矩阵的秩)')
+    parser.add_argument('--lora_alpha', type=int, default=32,
+                        help='LoRA缩放参数 (alpha，通常设为2*rank)')
+    parser.add_argument('--lora_dropout', type=float, default=0.1,
+                        help='LoRA层的dropout率')
+    parser.add_argument('--lora_target_modules', type=str,
+                        default='c_attn,c_proj',
+                        help='LoRA目标模块，逗号分隔 (GPT2默认: c_attn,c_proj)')
+
     # === 训练参数 ===
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='学习率')
@@ -61,10 +74,20 @@ def get_args():
 
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='fedavg',
-                        choices=['fedavg', 'weighted'],
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg'],
                         help='聚合算法')
     parser.add_argument('--use_coordinates', action='store_true',
                         help='是否使用坐标信息进行加权聚合')
+
+    # === LLM聚合参数 ===
+    parser.add_argument('--llm_api_key', type=str, default=None,
+                        help='LLM API密钥 (用于智能聚合)')
+    parser.add_argument('--llm_model', type=str, default='gemini-pro',
+                        help='使用的LLM模型名称')
+    parser.add_argument('--llm_cache_rounds', type=int, default=5,
+                        help='LLM权重缓存轮数')
+    parser.add_argument('--llm_min_confidence', type=float, default=0.7,
+                        help='LLM决策最小置信度阈值')
 
     # === 系统参数 ===
     parser.add_argument('--device', type=str, default='auto',
@@ -83,59 +106,15 @@ def get_args():
     parser.add_argument('--save_model', action='store_true',
                         help='是否保存模型')
 
-    # === TimeLLM特定参数 ===
-    parser.add_argument('--model_type', type=str, default='transformer',
-                        choices=['transformer', 'lstm', 'mlp', 'timellm'],
-                        help='模型类型')
-    parser.add_argument('--llm_model', type=str, default='GPT2',
-                        choices=['GPT2', 'LLAMA', 'BERT'],
-                        help='LLM模型类型')
-    parser.add_argument('--llm_dim', type=int, default=768,
-                        help='LLM模型维度 (GPT2-small:768, LLAMA7b:4096)')
-    parser.add_argument('--llm_layers', type=int, default=6,
-                        help='使用的LLM层数')
-    parser.add_argument('--patch_len', type=int, default=16,
-                        help='Patch长度')
-    parser.add_argument('--stride', type=int, default=8,
-                        help='Patch步长')
-    parser.add_argument('--prompt_domain', type=int, default=0,
-                        help='是否使用领域提示')
-
-    # TimeLLM必需的额外参数（参考原始代码）
-    parser.add_argument('--d_ff', type=int, default=32,
-                        help='dimension of fcn')
-    parser.add_argument('--label_len', type=int, default=48,
-                        help='start token length')
-    parser.add_argument('--features', type=str, default='S',
-                        help='forecasting task, options:[M, S, MS]')
-    parser.add_argument('--target', type=str, default='OT',
-                        help='target feature in S or MS task')
-    parser.add_argument('--freq', type=str, default='h',
-                        help='freq for time features encoding')
-    parser.add_argument('--embed', type=str, default='timeF',
-                        help='time features encoding, options:[timeF, fixed, learned]')
-    parser.add_argument('--activation', type=str, default='gelu',
-                        help='activation')
-    parser.add_argument('--output_attention', action='store_true',
-                        help='whether to output attention in encoder')
-    parser.add_argument('--factor', type=int, default=1,
-                        help='attn factor')
-    parser.add_argument('--moving_avg', type=int, default=25,
-                        help='window size of moving average')
-
-    # TimeLLM原始训练参数
-    parser.add_argument('--task_name', type=str, default='long_term_forecast',
-                        help='task name')
-    parser.add_argument('--e_layers', type=int, default=2,
-                        help='num of encoder layers')
-    parser.add_argument('--d_layers', type=int, default=1,
-                        help='num of decoder layers')
-
     args = parser.parse_args()
 
     # 设备自动检测
     if args.device == 'auto':
         args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # 处理LoRA目标模块
+    if args.lora_target_modules:
+        args.lora_target_modules = [m.strip() for m in args.lora_target_modules.split(',')]
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
@@ -168,16 +147,17 @@ def print_args(args):
     print(f"  层数: {args.n_layers}")
     print(f"  学习率: {args.lr}")
 
+    print(f"\nLoRA配置:")
+    print(f"  使用LoRA: {args.use_lora}")
+    if args.use_lora:
+        print(f"  LoRA秩: {args.lora_rank}")
+        print(f"  LoRA alpha: {args.lora_alpha}")
+        print(f"  LoRA dropout: {args.lora_dropout}")
+        print(f"  目标模块: {args.lora_target_modules}")
+
     print(f"\n系统配置:")
     print(f"  设备: {args.device}")
     print(f"  随机种子: {args.seed}")
     print(f"  保存目录: {args.save_dir}")
-
-    if args.model_type == 'timellm':
-        print(f"  LLM模型: {args.llm_model}")
-        print(f"  LLM维度: {args.llm_dim}")
-        print(f"  LLM层数: {args.llm_layers}")
-        print(f"  Patch长度: {args.patch_len}")
-        print(f"  Patch步长: {args.stride}")
 
     print("=" * 80)

@@ -9,6 +9,15 @@ from layers.Embed import PatchEmbedding
 import transformers
 from layers.StandardNorm import Normalize
 
+# 添加PEFT支持
+try:
+    from peft import LoraConfig, get_peft_model, TaskType
+
+    PEFT_AVAILABLE = True
+except ImportError:
+    print("警告: PEFT库未安装，将禁用LoRA功能。请运行: pip install peft")
+    PEFT_AVAILABLE = False
+
 transformers.logging.set_verbosity_error()
 
 
@@ -40,140 +49,19 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.stride = configs.stride
 
-        if configs.llm_model == 'LLAMA':
-            # self.llama_config = LlamaConfig.from_pretrained('/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/')
-            self.llama_config = LlamaConfig.from_pretrained('huggyllama/llama-7b')
-            self.llama_config.num_hidden_layers = configs.llm_layers
-            self.llama_config.output_attentions = True
-            self.llama_config.output_hidden_states = True
-            try:
-                self.llm_model = LlamaModel.from_pretrained(
-                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
-                    'huggyllama/llama-7b',
-                    trust_remote_code=True,
-                    local_files_only=True,
-                    config=self.llama_config,
-                    # load_in_4bit=True
-                )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
-                self.llm_model = LlamaModel.from_pretrained(
-                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
-                    'huggyllama/llama-7b',
-                    trust_remote_code=True,
-                    local_files_only=False,
-                    config=self.llama_config,
-                    # load_in_4bit=True
-                )
-            try:
-                self.tokenizer = LlamaTokenizer.from_pretrained(
-                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/tokenizer.model",
-                    'huggyllama/llama-7b',
-                    trust_remote_code=True,
-                    local_files_only=True
-                )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
-                self.tokenizer = LlamaTokenizer.from_pretrained(
-                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/tokenizer.model",
-                    'huggyllama/llama-7b',
-                    trust_remote_code=True,
-                    local_files_only=False
-                )
+        # 选择模型
+        if configs.llm_model == 'DeepSeek':
+            self._init_deepseek_model(configs)
         elif configs.llm_model == 'GPT2':
-            self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2')
-            self.gpt2_config.num_hidden_layers = configs.llm_layers
-            self.gpt2_config.output_attentions = True
-            self.gpt2_config.output_hidden_states = True
-            try:
-                self.llm_model = GPT2Model.from_pretrained(
-                    'openai-community/gpt2',
-                    trust_remote_code=True,
-                    local_files_only=True,
-                    config=self.gpt2_config,
-                )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
-                self.llm_model = GPT2Model.from_pretrained(
-                    'openai-community/gpt2',
-                    trust_remote_code=True,
-                    local_files_only=False,
-                    config=self.gpt2_config,
-                )
-
-            try:
-                self.tokenizer = GPT2Tokenizer.from_pretrained(
-                    'openai-community/gpt2',
-                    trust_remote_code=True,
-                    local_files_only=True
-                )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
-                self.tokenizer = GPT2Tokenizer.from_pretrained(
-                    'openai-community/gpt2',
-                    trust_remote_code=True,
-                    local_files_only=False
-                )
+            self._init_gpt2_model(configs)
         elif configs.llm_model == 'BERT':
-            self.bert_config = BertConfig.from_pretrained('google-bert/bert-base-uncased')
-
-            self.bert_config.num_hidden_layers = configs.llm_layers
-            self.bert_config.output_attentions = True
-            self.bert_config.output_hidden_states = True
-            try:
-                self.llm_model = BertModel.from_pretrained(
-                    'google-bert/bert-base-uncased',
-                    trust_remote_code=True,
-                    local_files_only=True,
-                    config=self.bert_config,
-                )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
-                self.llm_model = BertModel.from_pretrained(
-                    'google-bert/bert-base-uncased',
-                    trust_remote_code=True,
-                    local_files_only=False,
-                    config=self.bert_config,
-                )
-
-            try:
-                self.tokenizer = BertTokenizer.from_pretrained(
-                    'google-bert/bert-base-uncased',
-                    trust_remote_code=True,
-                    local_files_only=True
-                )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
-                self.tokenizer = BertTokenizer.from_pretrained(
-                    'google-bert/bert-base-uncased',
-                    trust_remote_code=True,
-                    local_files_only=False
-                )
-        elif configs.llm_model == 'DeepSeek':
-            self.deepseek_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-            self.deepseek_config.num_hidden_layers = configs.llm_layers
-            self.deepseek_config.output_attentions = True
-            self.deepseek_config.output_hidden_states = True
-            try:
-                self.llm_model = AutoModel.from_pretrained(
-                    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-                    trust_remote_code=True,
-                    local_files_only=True,
-                    config=self.deepseek_config,
-                )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
-            try:
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-                    trust_remote_code=True,
-                    local_files_only=True
-                )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
+            self._init_bert_model(configs)
+        elif configs.llm_model == 'LLAMA':
+            self._init_llama_model(configs)
         else:
             raise Exception('LLM model is not defined')
 
+        # 设置tokenizer的pad_token
         if self.tokenizer.eos_token:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         else:
@@ -181,13 +69,18 @@ class Model(nn.Module):
             self.tokenizer.add_special_tokens({'pad_token': pad_token})
             self.tokenizer.pad_token = pad_token
 
+        # 冻结LLM参数
         for param in self.llm_model.parameters():
             param.requires_grad = False
 
+        # 添加LoRA支持
+        self._apply_lora_if_enabled(configs)
+
+        # 设置描述信息
         if configs.prompt_domain:
             self.description = configs.content
         else:
-            self.description = 'The Electricity Transformer Temperature (ETT) is a crucial indicator in the electric power long-term deployment.'
+            self.description = 'The dataset records the wireless traffic of a certain base station'
 
         self.dropout = nn.Dropout(configs.dropout)
 
@@ -211,25 +104,281 @@ class Model(nn.Module):
             raise NotImplementedError
 
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
-        # 在最后添加参数初始化，提高数值稳定性
-        self._initialize_weights()
 
-    def _initialize_weights(self):
-        """初始化可训练参数，提高数值稳定性"""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                # 使用Xavier初始化
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-            elif isinstance(module, nn.Conv1d):
-                # 使用Kaiming初始化
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-            elif isinstance(module, nn.LayerNorm):
-                nn.init.constant_(module.bias, 0.0)
-                nn.init.constant_(module.weight, 1.0)
+        # 确保所有新添加的层使用float32
+        self._ensure_float32_layers()
+
+    def _init_deepseek_model(self, configs):
+        """初始化DeepSeek模型"""
+        self.deepseek_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+        self.deepseek_config.num_hidden_layers = configs.llm_layers
+        self.deepseek_config.output_attentions = True
+        self.deepseek_config.output_hidden_states = True
+
+        try:
+            self.llm_model = AutoModel.from_pretrained(
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                trust_remote_code=True,
+                local_files_only=True,
+                config=self.deepseek_config,
+            )
+        except EnvironmentError:
+            print("Local model files not found. Attempting to download...")
+            self.llm_model = AutoModel.from_pretrained(
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                trust_remote_code=True,
+                local_files_only=False,
+                config=self.deepseek_config,
+            )
+
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        except EnvironmentError:
+            print("Local tokenizer files not found. Attempting to download them..")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
+    def _init_gpt2_model(self, configs):
+        """初始化GPT2模型"""
+        self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2')
+        self.gpt2_config.num_hidden_layers = configs.llm_layers
+        self.gpt2_config.output_attentions = True
+        self.gpt2_config.output_hidden_states = True
+
+        try:
+            self.llm_model = GPT2Model.from_pretrained(
+                'openai-community/gpt2',
+                trust_remote_code=True,
+                local_files_only=True,
+                config=self.gpt2_config,
+            )
+        except EnvironmentError:
+            print("Local model files not found. Attempting to download...")
+            self.llm_model = GPT2Model.from_pretrained(
+                'openai-community/gpt2',
+                trust_remote_code=True,
+                local_files_only=False,
+                config=self.gpt2_config,
+            )
+
+        try:
+            self.tokenizer = GPT2Tokenizer.from_pretrained(
+                'openai-community/gpt2',
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        except EnvironmentError:
+            print("Local tokenizer files not found. Attempting to download them..")
+            self.tokenizer = GPT2Tokenizer.from_pretrained(
+                'openai-community/gpt2',
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
+    def _init_bert_model(self, configs):
+        """初始化BERT模型"""
+        self.bert_config = BertConfig.from_pretrained('google-bert/bert-base-uncased')
+        self.bert_config.num_hidden_layers = configs.llm_layers
+        self.bert_config.output_attentions = True
+        self.bert_config.output_hidden_states = True
+
+        try:
+            self.llm_model = BertModel.from_pretrained(
+                'google-bert/bert-base-uncased',
+                trust_remote_code=True,
+                local_files_only=True,
+                config=self.bert_config,
+            )
+        except EnvironmentError:
+            print("Local model files not found. Attempting to download...")
+            self.llm_model = BertModel.from_pretrained(
+                'google-bert/bert-base-uncased',
+                trust_remote_code=True,
+                local_files_only=False,
+                config=self.bert_config,
+            )
+
+        try:
+            self.tokenizer = BertTokenizer.from_pretrained(
+                'google-bert/bert-base-uncased',
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        except EnvironmentError:
+            print("Local tokenizer files not found. Attempting to download them..")
+            self.tokenizer = BertTokenizer.from_pretrained(
+                'google-bert/bert-base-uncased',
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
+    def _init_llama_model(self, configs):
+        """初始化LLaMA模型"""
+        self.llama_config = LlamaConfig.from_pretrained('huggyllama/llama-7b')
+        self.llama_config.num_hidden_layers = configs.llm_layers
+        self.llama_config.output_attentions = True
+        self.llama_config.output_hidden_states = True
+
+        try:
+            self.llm_model = LlamaModel.from_pretrained(
+                'huggyllama/llama-7b',
+                trust_remote_code=True,
+                local_files_only=True,
+                config=self.llama_config,
+            )
+        except EnvironmentError:
+            print("Local model files not found. Attempting to download...")
+            self.llm_model = LlamaModel.from_pretrained(
+                'huggyllama/llama-7b',
+                trust_remote_code=True,
+                local_files_only=False,
+                config=self.llama_config,
+            )
+
+        try:
+            self.tokenizer = LlamaTokenizer.from_pretrained(
+                'huggyllama/llama-7b',
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        except EnvironmentError:
+            print("Local tokenizer files not found. Attempting to download them..")
+            self.tokenizer = LlamaTokenizer.from_pretrained(
+                'huggyllama/llama-7b',
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
+    def _apply_lora_if_enabled(self, configs):
+        """如果启用LoRA，则应用LoRA配置"""
+        if hasattr(configs, 'use_lora') and configs.use_lora:
+            if not PEFT_AVAILABLE:
+                raise ImportError("LoRA功能需要安装PEFT库: pip install peft")
+
+            print("正在应用LoRA配置...")
+
+            # 根据模型类型设置目标模块
+            target_modules = self._get_target_modules(configs)
+            print(f"目标模块: {target_modules}")
+
+            # 特殊处理GPT2的Conv1D层
+            lora_config = LoraConfig(
+                task_type=TaskType.FEATURE_EXTRACTION,
+                r=configs.lora_rank,
+                lora_alpha=configs.lora_alpha,
+                lora_dropout=configs.lora_dropout,
+                target_modules=target_modules,
+                bias="none",
+                fan_in_fan_out=False,  # GPT2需要设置为False
+                modules_to_save=None,
+            )
+
+            try:
+                # 应用LoRA
+                self.llm_model = get_peft_model(self.llm_model, lora_config)
+
+                # 打印参数统计
+                trainable_params = sum(p.numel() for p in self.llm_model.parameters() if p.requires_grad)
+                total_params = sum(p.numel() for p in self.llm_model.parameters())
+
+                print(f"LoRA配置完成:")
+                print(f"  可训练参数: {trainable_params:,}")
+                print(f"  总参数: {total_params:,}")
+                print(f"  可训练参数比例: {100 * trainable_params / total_params:.2f}%")
+
+            except Exception as e:
+                print(f"LoRA配置失败: {e}")
+                print("尝试使用更保守的配置...")
+
+                # 使用更保守的配置重试
+                conservative_config = LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    r=min(8, configs.lora_rank),  # 降低rank
+                    lora_alpha=16,
+                    lora_dropout=0.1,
+                    target_modules=["c_attn"],  # 只使用一个模块
+                    bias="none",
+                    fan_in_fan_out=False,
+                )
+
+                self.llm_model = get_peft_model(self.llm_model, conservative_config)
+                print("使用保守配置成功应用LoRA")
+
+    def _get_target_modules(self, configs):
+        """根据模型类型获取目标模块"""
+        if hasattr(configs, 'lora_target_modules') and configs.lora_target_modules:
+            return configs.lora_target_modules
+
+        # 根据实际模型架构自动检测目标模块
+        target_modules = self._auto_detect_target_modules()
+        if target_modules:
+            return target_modules
+
+        # 如果自动检测失败，使用默认配置
+        if configs.llm_model == 'GPT2':
+            return ["c_attn", "c_proj"]  # GPT2的注意力层
+        elif configs.llm_model == 'BERT':
+            return ["query", "value", "key", "dense"]  # BERT的注意力层
+        elif configs.llm_model in ['LLAMA', 'DeepSeek']:
+            return ["q_proj", "v_proj", "k_proj", "o_proj"]  # LLaMA系列的注意力层
+        else:
+            return ["c_attn"]  # 最通用的默认值
+
+    def _auto_detect_target_modules(self):
+        """自动检测模型中可用的目标模块"""
+        import re
+
+        # 获取所有模块名称
+        all_modules = set()
+        for name, module in self.llm_model.named_modules():
+            if hasattr(module, 'weight') and len(module.weight.shape) == 2:
+                # 只考虑线性层
+                module_name = name.split('.')[-1]  # 获取最后一部分名称
+                all_modules.add(module_name)
+
+        print(f"检测到的线性层模块: {sorted(all_modules)}")
+
+        # 定义各种可能的注意力模块名称
+        attention_patterns = [
+            # GPT系列
+            'c_attn', 'c_proj', 'attn.c_attn', 'attn.c_proj',
+            # BERT系列
+            'query', 'key', 'value', 'dense',
+            # LLaMA/DeepSeek系列
+            'q_proj', 'k_proj', 'v_proj', 'o_proj',
+            # 通用模式
+            'self_attn', 'attention'
+        ]
+
+        # 找到匹配的模块
+        found_modules = []
+        for pattern in attention_patterns:
+            if pattern in all_modules:
+                found_modules.append(pattern)
+
+        # 返回找到的模块，如果太少就返回None让使用默认值
+        if len(found_modules) >= 2:
+            print(f"自动检测到目标模块: {found_modules}")
+            return found_modules
+        else:
+            print("自动检测的目标模块太少，将使用默认配置")
+            return None
+
+    def get_trainable_parameters(self):
+        """获取可训练参数的状态字典"""
+        if hasattr(self.llm_model, 'peft_config'):
+            # 如果使用了PEFT，只返回可训练的参数
+            return {k: v for k, v in self.named_parameters() if v.requires_grad}
+        else:
+            # 否则返回所有参数
+            return dict(self.named_parameters())
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
@@ -277,8 +426,9 @@ class Model(nn.Module):
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
-        # 修改这一行：移除 .to(torch.bfloat16)
-        enc_out, n_vars = self.patch_embedding(x_enc)
+
+        # 修复数据类型问题：保持float32而不是转换为bfloat16
+        enc_out, n_vars = self.patch_embedding(x_enc.float())  # 确保使用float32
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
         llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
         dec_out = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
@@ -303,6 +453,14 @@ class Model(nn.Module):
         mean_value = torch.mean(corr, dim=1)
         _, lags = torch.topk(mean_value, self.top_k, dim=-1)
         return lags
+
+    def _ensure_float32_layers(self):
+        """确保所有非LLM层使用float32"""
+        self.mapping_layer = self.mapping_layer.float()
+        self.reprogramming_layer = self.reprogramming_layer.float()
+        self.output_projection = self.output_projection.float()
+        self.normalize_layers = self.normalize_layers.float()
+        self.patch_embedding = self.patch_embedding.float()
 
 
 class ReprogrammingLayer(nn.Module):
@@ -344,3 +502,4 @@ class ReprogrammingLayer(nn.Module):
         reprogramming_embedding = torch.einsum("bhls,she->blhe", A, value_embedding)
 
         return reprogramming_embedding
+
