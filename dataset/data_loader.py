@@ -230,7 +230,24 @@ class FederatedDataLoader:
                 X = torch.FloatTensor(sequences[split]['history'])
                 y = torch.FloatTensor(sequences[split]['target'])
 
-                dataset = TensorDataset(X, y)
+                # 检查是否为TimeLLM模型，需要不同的数据格式
+                if hasattr(self.args, 'model_type') and self.args.model_type == 'timellm':
+                    # TimeLLM需要的数据格式：(batch_size, seq_len, features)
+                    X = X.unsqueeze(-1)  # 添加特征维度
+                    y = y.unsqueeze(-1)  # 添加特征维度
+
+                    batch_size_data, seq_len, _ = X.shape
+                    pred_len = y.shape[1]
+
+                    # 创建时间特征标记（简化版）
+                    # 这里创建基本的时间特征，实际使用时可以根据真实时间戳生成
+                    x_mark = torch.zeros(batch_size_data, seq_len, 4)  # [month, day, weekday, hour]
+                    y_mark = torch.zeros(batch_size_data, pred_len, 4)
+
+                    dataset = TensorDataset(X, y, x_mark, y_mark)
+                else:
+                    # 原有格式，用于其他模型
+                    dataset = TensorDataset(X, y)
 
                 # 训练集需要shuffle，测试集不需要
                 shuffle = (split == 'train')

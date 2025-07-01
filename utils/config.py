@@ -83,6 +83,54 @@ def get_args():
     parser.add_argument('--save_model', action='store_true',
                         help='是否保存模型')
 
+    # === TimeLLM特定参数 ===
+    parser.add_argument('--model_type', type=str, default='transformer',
+                        choices=['transformer', 'lstm', 'mlp', 'timellm'],
+                        help='模型类型')
+    parser.add_argument('--llm_model', type=str, default='GPT2',
+                        choices=['GPT2', 'LLAMA', 'BERT'],
+                        help='LLM模型类型')
+    parser.add_argument('--llm_dim', type=int, default=768,
+                        help='LLM模型维度 (GPT2-small:768, LLAMA7b:4096)')
+    parser.add_argument('--llm_layers', type=int, default=6,
+                        help='使用的LLM层数')
+    parser.add_argument('--patch_len', type=int, default=16,
+                        help='Patch长度')
+    parser.add_argument('--stride', type=int, default=8,
+                        help='Patch步长')
+    parser.add_argument('--prompt_domain', type=int, default=0,
+                        help='是否使用领域提示')
+
+    # TimeLLM必需的额外参数（参考原始代码）
+    parser.add_argument('--d_ff', type=int, default=32,
+                        help='dimension of fcn')
+    parser.add_argument('--label_len', type=int, default=48,
+                        help='start token length')
+    parser.add_argument('--features', type=str, default='S',
+                        help='forecasting task, options:[M, S, MS]')
+    parser.add_argument('--target', type=str, default='OT',
+                        help='target feature in S or MS task')
+    parser.add_argument('--freq', type=str, default='h',
+                        help='freq for time features encoding')
+    parser.add_argument('--embed', type=str, default='timeF',
+                        help='time features encoding, options:[timeF, fixed, learned]')
+    parser.add_argument('--activation', type=str, default='gelu',
+                        help='activation')
+    parser.add_argument('--output_attention', action='store_true',
+                        help='whether to output attention in encoder')
+    parser.add_argument('--factor', type=int, default=1,
+                        help='attn factor')
+    parser.add_argument('--moving_avg', type=int, default=25,
+                        help='window size of moving average')
+
+    # TimeLLM原始训练参数
+    parser.add_argument('--task_name', type=str, default='long_term_forecast',
+                        help='task name')
+    parser.add_argument('--e_layers', type=int, default=2,
+                        help='num of encoder layers')
+    parser.add_argument('--d_layers', type=int, default=1,
+                        help='num of decoder layers')
+
     args = parser.parse_args()
 
     # 设备自动检测
@@ -124,5 +172,12 @@ def print_args(args):
     print(f"  设备: {args.device}")
     print(f"  随机种子: {args.seed}")
     print(f"  保存目录: {args.save_dir}")
+
+    if args.model_type == 'timellm':
+        print(f"  LLM模型: {args.llm_model}")
+        print(f"  LLM维度: {args.llm_dim}")
+        print(f"  LLM层数: {args.llm_layers}")
+        print(f"  Patch长度: {args.patch_len}")
+        print(f"  Patch步长: {args.stride}")
 
     print("=" * 80)
