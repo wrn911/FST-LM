@@ -39,19 +39,12 @@ def save_results(results: Dict, save_dir: str):
     # 保存为JSON格式（便于查看）
     json_path = os.path.join(save_dir, 'results.json')
 
-    # 创建可序列化的结果副本
-    serializable_results = {}
-    for key, value in results.items():
-        if key == 'args':
-            serializable_results[key] = value
-        elif isinstance(value, (list, dict, str, int, float, bool)):
-            serializable_results[key] = value
-        else:
-            # 对于复杂对象，尝试转换为基本类型
-            try:
-                serializable_results[key] = json.loads(json.dumps(value, default=str))
-            except:
-                serializable_results[key] = str(value)
+    # 转换NumPy类型
+    serializable_results = convert_numpy_types(results)
+
+    # 处理device对象
+    if 'args' in serializable_results and 'device' in serializable_results['args']:
+        serializable_results['args']['device'] = str(serializable_results['args']['device'])
 
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(serializable_results, f, indent=2, ensure_ascii=False)
@@ -62,7 +55,6 @@ def save_results(results: Dict, save_dir: str):
         pickle.dump(results, f)
 
     logging.info(f"结果已保存到: {json_path} 和 {pickle_path}")
-
 
 def plot_training_curves(training_history: List[Dict], save_dir: str):
     """绘制训练曲线"""
@@ -362,3 +354,18 @@ def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, lengt
     print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
     if iteration == total:
         print()
+
+def convert_numpy_types(obj):
+    """递归转换NumPy数据类型为Python原生类型"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj

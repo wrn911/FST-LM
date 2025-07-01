@@ -31,10 +31,6 @@ def setup_environment(args):
 
     # 设置设备
     device = torch.device(args.device)
-    args.device = device
-
-    # 设置日志
-    setup_logging(args)
 
     # 创建实验目录
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -42,6 +38,10 @@ def setup_environment(args):
     exp_dir = os.path.join(args.save_dir, exp_name)
     os.makedirs(exp_dir, exist_ok=True)
     args.exp_dir = exp_dir
+    args.device = device
+
+    # 设置日志
+    setup_logging(args)
 
     # 保存配置
     with open(os.path.join(exp_dir, 'config.json'), 'w') as f:
@@ -93,7 +93,7 @@ def main():
         logging.info("=" * 60)
 
         # 创建全局模型（这里使用Transformer作为示例）
-        global_model = create_model(args, model_type='transformer')
+        global_model = create_model(args, model_type='lstm')
         global_model.to(args.device)
 
         # 打印模型信息
