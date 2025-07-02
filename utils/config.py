@@ -82,10 +82,10 @@ def get_args():
     # === LLM聚合参数 ===
     parser.add_argument('--llm_api_key', type=str, default=None,
                         help='LLM API密钥 (用于智能聚合)')
-    parser.add_argument('--llm_model', type=str, default='gemini-pro',
+    parser.add_argument('--llm_model', type=str, default='gemini-2.5-flash',
                         help='使用的LLM模型名称')
-    parser.add_argument('--llm_cache_rounds', type=int, default=5,
-                        help='LLM权重缓存轮数')
+    parser.add_argument('--llm_cache_rounds', type=int, default=1,
+                        help='LLM权重缓存轮数（1表示每轮都调用）')
     parser.add_argument('--llm_min_confidence', type=float, default=0.7,
                         help='LLM决策最小置信度阈值')
 
@@ -154,6 +154,16 @@ def print_args(args):
         print(f"  LoRA alpha: {args.lora_alpha}")
         print(f"  LoRA dropout: {args.lora_dropout}")
         print(f"  目标模块: {args.lora_target_modules}")
+
+    print(f"\nLLM聚合配置:")
+    if args.aggregation == 'llm_fedavg':
+        print(f"  使用LLM聚合: 是")
+        print(f"  LLM模型: {args.llm_model}")
+        print(f"  缓存轮数: {args.llm_cache_rounds}")
+        print(f"  最小置信度: {args.llm_min_confidence}")
+        print(f"  API密钥: {'已设置' if args.llm_api_key else '未设置'}")
+    else:
+        print(f"  使用LLM聚合: 否")
 
     print(f"\n系统配置:")
     print(f"  设备: {args.device}")

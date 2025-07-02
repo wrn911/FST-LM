@@ -99,6 +99,10 @@ class FederatedClient:
             torch.cuda.empty_cache()
 
         avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+
+        # 记录最近的训练损失，用于LLM聚合决策
+        self.last_loss = avg_loss
+
         return avg_loss
 
     def evaluate(self, test_loader=None):

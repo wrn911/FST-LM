@@ -195,7 +195,7 @@ def get_aggregator(aggregation_method: str, **kwargs):
     elif aggregation_method.lower() == 'lora_fedavg':
         return LoRAFedAvgAggregator()
     elif aggregation_method.lower() == 'llm_fedavg':
-        from .llm_aggregator import LLMAggregator
-        return LLMAggregator(**kwargs)
+        from .simple_llm_aggregator import SimpleLLMAggregator
+        return SimpleLLMAggregator(**kwargs)
     else:
         raise ValueError(f"不支持的聚合方法: {aggregation_method}")
