@@ -96,8 +96,7 @@ class Model(nn.Module):
         self.vocab_size = self.word_embeddings.shape[0]
         self.num_tokens = 1000
 
-        # 修复：映射层应该输出到LLM的隐藏维度
-        self.mapping_layer = nn.Linear(self.vocab_size, self.d_llm)
+        self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
 
         # 修复：使用正确的LLM隐藏维度
         self.reprogramming_layer = ReprogrammingLayer(
