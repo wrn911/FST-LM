@@ -32,7 +32,7 @@ def get_args():
     # === 联邦学习参数 ===
     parser.add_argument('--num_clients', type=int, default=50,
                         help='参与联邦学习的基站数量')
-    parser.add_argument('--frac', type=float, default=0.1,
+    parser.add_argument('--frac', type=float, default=0.3,
                         help='每轮参与训练的客户端比例')
     parser.add_argument('--rounds', type=int, default=100,
                         help='联邦学习轮数')
@@ -50,22 +50,27 @@ def get_args():
                         help='Transformer层数')
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout概率')
+    parser.add_argument('--llm_model_name', type=str, default='Qwen3',
+                        choices=['Qwen3', 'GPT2', 'BERT', 'LLAMA', 'DeepSeek'],
+                        help='使用的LLM模型')
+    parser.add_argument('--llm_layers', type=int, default=6,
+                        help='LLM模型层数（Qwen3-0.6B建议4-6层）')
 
     # === LoRA参数 ===
     parser.add_argument('--use_lora', action='store_true',
                         help='是否使用LoRA进行参数高效微调')
-    parser.add_argument('--lora_rank', type=int, default=16,
+    parser.add_argument('--lora_rank', type=int, default=8,
                         help='LoRA秩 (r参数，控制适应矩阵的秩)')
-    parser.add_argument('--lora_alpha', type=int, default=32,
+    parser.add_argument('--lora_alpha', type=int, default=16,
                         help='LoRA缩放参数 (alpha，通常设为2*rank)')
     parser.add_argument('--lora_dropout', type=float, default=0.1,
                         help='LoRA层的dropout率')
     parser.add_argument('--lora_target_modules', type=str,
-                        default='c_attn,c_proj',
-                        help='LoRA目标模块，逗号分隔 (GPT2默认: c_attn,c_proj)')
+                        default='q_proj,k_proj,v_proj,o_proj',
+                        help='LoRA目标模块，逗号分隔 (Qwen3默认: q_proj,k_proj,v_proj,o_proj)')
 
     # === 训练参数 ===
-    parser.add_argument('--lr', type=float, default=1e-3,
+    parser.add_argument('--lr', type=float, default=4e-3,
                         help='学习率')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='权重衰减')
@@ -80,9 +85,9 @@ def get_args():
                         help='是否使用坐标信息进行加权聚合')
 
     # === LLM聚合参数 ===
-    parser.add_argument('--llm_api_key', type=str, default=None,
-                        help='LLM API密钥 (用于智能聚合)')
-    parser.add_argument('--llm_model', type=str, default='gemini-2.5-flash',
+    parser.add_argument('--llm_api_key', type=str, default="sk-93nWYhI8SrnXad5m9932CeBdDeDf4233B21d93D217095f22",
+                        help='DeepSeek API密钥 (用于智能聚合)')
+    parser.add_argument('--llm_model', type=str, default='DeepSeek-R1',
                         help='使用的LLM模型名称')
     parser.add_argument('--llm_cache_rounds', type=int, default=1,
                         help='LLM权重缓存轮数（1表示每轮都调用）')

@@ -22,8 +22,8 @@ class FederatedServer:
         if args.aggregation == 'llm_fedavg':
             aggregator_kwargs = {
                 'api_key': getattr(args, 'llm_api_key', None),
-                'model_name': getattr(args, 'llm_model', 'gemini-pro'),
-                'cache_rounds': getattr(args, 'llm_cache_rounds', 5),
+                'model_name': getattr(args, 'llm_model', 'DeepSeek-R1'),
+                'cache_rounds': getattr(args, 'llm_cache_rounds', 1),
                 'min_confidence': getattr(args, 'llm_min_confidence', 0.7),
                 'is_lora_mode': hasattr(args, 'use_lora') and args.use_lora
             }

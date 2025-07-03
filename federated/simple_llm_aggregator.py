@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-简化版LLM辅助联邦聚合器
+简化版LLM辅助联邦聚合器 - 使用DeepSeek API
 """
 
 import json
@@ -13,18 +13,18 @@ from .aggregation import FedAvgAggregator, LoRAFedAvgAggregator
 
 
 class SimpleLLMAggregator:
-    """简化版LLM辅助聚合器"""
+    """简化版LLM辅助聚合器 - 使用DeepSeek"""
 
     def __init__(self,
                  api_key: str = None,
-                 model_name: str = "gemini-2.5-flash",
+                 model_name: str = "DeepSeek-R1",
                  fallback_aggregator=None,
                  cache_rounds: int = 1,  # 改为1，即每轮都调用
                  min_confidence: float = 0.7,
                  is_lora_mode: bool = False):
         """
         Args:
-            api_key: Gemini API密钥
+            api_key: DeepSeek API密钥
             model_name: 模型名称
             fallback_aggregator: 备用聚合器
             cache_rounds: 缓存轮数（设为1表示每轮都调用LLM）
@@ -55,19 +55,21 @@ class SimpleLLMAggregator:
         self._init_llm_client()
 
     def _init_llm_client(self):
-        """初始化Gemini客户端"""
+        """初始化DeepSeek客户端"""
         try:
             if self.api_key:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self.llm_client = genai.GenerativeModel(self.model_name)
-                self.logger.info(f"成功初始化Gemini客户端")
+                from openai import OpenAI
+                self.llm_client = OpenAI(
+                    api_key=self.api_key,
+                    base_url="http://10.2.8.77:3000/v1"
+                )
+                self.logger.info(f"成功初始化DeepSeek客户端")
             else:
-                self.logger.warning("未提供Gemini API密钥，将使用备用聚合器")
+                self.logger.warning("未提供DeepSeek API密钥，将使用备用聚合器")
         except ImportError:
-            self.logger.error("请安装google-generativeai: pip install google-generativeai")
+            self.logger.error("请安装openai库: pip install openai")
         except Exception as e:
-            self.logger.error(f"Gemini客户端初始化失败: {e}")
+            self.logger.error(f"DeepSeek客户端初始化失败: {e}")
 
     def aggregate(self, client_models: List[Dict], client_info: List[Dict] = None,
                   client_stats: List = None, round_idx: int = 0):
@@ -189,12 +191,24 @@ class SimpleLLMAggregator:
         return prompt
 
     def _call_llm(self, prompt: str) -> str:
-        """调用Gemini获取响应"""
+        """调用DeepSeek获取响应"""
         try:
-            response = self.llm_client.generate_content(prompt)
-            return response.text
+            messages = [{"role": "user", "content": prompt}]
+            response = self.llm_client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                stream=True
+            )
+
+            # 收集流式响应
+            content = ""
+            for chunk in response:
+                if chunk.choices[0].delta.content:
+                    content += chunk.choices[0].delta.content
+
+            return content
         except Exception as e:
-            self.logger.error(f"Gemini调用失败: {e}")
+            self.logger.error(f"DeepSeek调用失败: {e}")
             raise
 
     def _parse_weights(self, response: str, expected_length: int) -> Optional[List[float]]:

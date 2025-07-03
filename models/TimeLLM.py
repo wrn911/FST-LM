@@ -58,6 +58,8 @@ class Model(nn.Module):
             self._init_bert_model(configs)
         elif configs.llm_model == 'LLAMA':
             self._init_llama_model(configs)
+        elif configs.llm_model == 'Qwen3':
+            self._init_qwen3_model(configs)
         else:
             raise Exception('LLM model is not defined')
 
@@ -107,6 +109,50 @@ class Model(nn.Module):
 
         # 确保所有新添加的层使用float32
         self._ensure_float32_layers()
+
+    def _init_qwen3_model(self, configs):
+        """初始化Qwen3模型"""
+        try:
+            from transformers import Qwen2Config, Qwen2Model, Qwen2Tokenizer
+        except ImportError:
+            print("警告: 请安装最新版transformers以支持Qwen3: pip install transformers>=4.37.0")
+            raise
+
+        # Qwen3-0.6B的配置
+        self.qwen_config = Qwen2Config.from_pretrained('Qwen/Qwen3-0.6B')
+        self.qwen_config.num_hidden_layers = configs.llm_layers
+        self.qwen_config.output_attentions = True
+        self.qwen_config.output_hidden_states = True
+
+        try:
+            self.llm_model = Qwen2Model.from_pretrained(
+                'Qwen/Qwen3-0.6B',
+                trust_remote_code=True,
+                local_files_only=True,
+                config=self.qwen_config,
+            )
+        except EnvironmentError:
+            print("本地模型文件未找到，正在下载...")
+            self.llm_model = Qwen2Model.from_pretrained(
+                'Qwen/Qwen3-0.6B',
+                trust_remote_code=True,
+                local_files_only=False,
+                config=self.qwen_config,
+            )
+
+        try:
+            self.tokenizer = Qwen2Tokenizer.from_pretrained(
+                'Qwen/Qwen3-0.6B',
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        except EnvironmentError:
+            print("本地tokenizer文件未找到，正在下载...")
+            self.tokenizer = Qwen2Tokenizer.from_pretrained(
+                'Qwen/Qwen3-0.6B',
+                trust_remote_code=True,
+                local_files_only=False
+            )
 
     def _init_deepseek_model(self, configs):
         """初始化DeepSeek模型"""
@@ -322,8 +368,10 @@ class Model(nn.Module):
             return target_modules
 
         # 如果自动检测失败，使用默认配置
-        if configs.llm_model == 'GPT2':
-            return ["c_attn", "c_proj"]  # GPT2的注意力层
+        if configs.llm_model == 'Qwen3':
+            return ["q_proj", "k_proj", "v_proj", "o_proj"]  # Qwen系列的注意力层
+        elif configs.llm_model == 'GPT2':
+            return ["c_attn", "c_proj"] # GPT2的注意力层
         elif configs.llm_model == 'BERT':
             return ["query", "value", "key", "dense"]  # BERT的注意力层
         elif configs.llm_model in ['LLAMA', 'DeepSeek']:
