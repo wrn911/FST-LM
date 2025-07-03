@@ -103,8 +103,6 @@ class Model(nn.Module):
         self.reprogramming_layer = ReprogrammingLayer(
             configs.d_model, configs.n_heads, self.d_ff, self.d_llm)
 
-        self.ts2language = Embedding_layer(configs)
-
         self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
         self.head_nf = self.d_ff * self.patch_nums
 
@@ -483,16 +481,13 @@ class Model(nn.Module):
         prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))
 
         # 修复：使用正确维度的映射
-        # source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
+        source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
 
         # 修复数据类型问题：保持float32
-        # enc_out, n_vars = self.patch_embedding(x_enc.float())
-        # enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
-
-        # 时序与语义对齐
-        enc_out, n_vars = self.ts2language(x_enc)
+        enc_out, n_vars = self.patch_embedding(x_enc.float())
+        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
 
         llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
         dec_out = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
@@ -566,16 +561,4 @@ class ReprogrammingLayer(nn.Module):
         reprogramming_embedding = torch.einsum("bhls,she->blhe", A, value_embedding)
 
         return reprogramming_embedding
-
-class Embedding_layer(nn.Module):
-    def __init__(self, configs):
-        super(Embedding_layer, self).__init__()
-        self.patch_embedding = PatchEmbedding(configs.d_model, configs.patch_len, configs.stride, configs.dropout)
-        self.output_projection = nn.Linear(configs.d_model, configs.llm_dim, bias=False)
-
-    def forward(self, x_enc):
-        enc_out, n_vars = self.patch_embedding(x_enc)
-        dec_out = self.output_projection(enc_out)
-        return dec_out, n_vars
-
 

@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 
 
 class ModelConfig:
-    """TimeLLM模型配置类 - 添加Qwen3支持"""
+    """TimeLLM模型配置类 - 修复版本"""
 
     def __init__(self, args):
         self.task_name = 'long_term_forecast'
@@ -35,11 +35,12 @@ class ModelConfig:
         self.d_ff = args.d_model * 4
 
         # LLM配置 - 根据模型类型设置
-        self.llm_model = getattr(args, 'llm_model_name', 'Qwen3')  # 新增参数
+        self.llm_model = getattr(args, 'llm_model_name', 'Qwen3')
 
+        # 初始设置，会在模型初始化时更新为实际值
         if self.llm_model == 'Qwen3':
-            self.llm_dim = 896  # Qwen3-0.6B的隐藏维度
-            self.llm_layers = min(6, getattr(args, 'llm_layers', 6))  # 较小模型，减少层数
+            self.llm_dim = 1024  # Qwen3-0.6B的隐藏维度（初始值）
+            self.llm_layers = min(6, getattr(args, 'llm_layers', 6))
         elif self.llm_model == 'GPT2':
             self.llm_dim = 768
             self.llm_layers = 6
@@ -58,11 +59,9 @@ class ModelConfig:
         # LoRA配置
         self.use_lora = getattr(args, 'use_lora', False)
         if self.use_lora:
-            # Qwen3-0.6B推荐的LoRA参数
-            self.lora_rank = getattr(args, 'lora_rank', 8)  # 较小模型使用较小的rank
-            self.lora_alpha = getattr(args, 'lora_alpha', 16)  # alpha通常为2*rank
+            self.lora_rank = getattr(args, 'lora_rank', 8)
+            self.lora_alpha = getattr(args, 'lora_alpha', 16)
             self.lora_dropout = getattr(args, 'lora_dropout', 0.1)
-            # Qwen3的默认目标模块
             self.lora_target_modules = getattr(args, 'lora_target_modules',
                                                ["q_proj", "k_proj", "v_proj", "o_proj"])
 

@@ -36,7 +36,7 @@ def get_args():
                         help='每轮参与训练的客户端比例')
     parser.add_argument('--rounds', type=int, default=100,
                         help='联邦学习轮数')
-    parser.add_argument('--local_epochs', type=int, default=3,
+    parser.add_argument('--local_epochs', type=int, default=5,
                         help='本地训练轮数')
     parser.add_argument('--local_bs', type=int, default=32,
                         help='本地批处理大小')
@@ -53,7 +53,7 @@ def get_args():
     parser.add_argument('--llm_model_name', type=str, default='Qwen3',
                         choices=['Qwen3', 'GPT2', 'BERT', 'LLAMA', 'DeepSeek'],
                         help='使用的LLM模型')
-    parser.add_argument('--llm_layers', type=int, default=6,
+    parser.add_argument('--llm_layers', type=int, default=12,
                         help='LLM模型层数（Qwen3-0.6B建议4-6层）')
 
     # === LoRA参数 ===
@@ -70,7 +70,7 @@ def get_args():
                         help='LoRA目标模块，逗号分隔 (Qwen3默认: q_proj,k_proj,v_proj,o_proj)')
 
     # === 训练参数 ===
-    parser.add_argument('--lr', type=float, default=4e-3,
+    parser.add_argument('--lr', type=float, default=3e-4,
                         help='学习率')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='权重衰减')
