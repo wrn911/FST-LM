@@ -1,0 +1,14 @@
+python federated_train.py \
+    --use_lora \
+    --lora_rank 16 \
+    --lora_alpha 32 \
+    --aggregation layer_aware_llm \
+    --layer_analysis_enabled \
+    --llm_api_key "sk-93nWYhI8SrnXad5m9932CeBdDeDf4233B21d93D217095f22" \
+    --llm_model "DeepSeek-R1" \
+    --llm_cache_rounds 1 \
+    --llm_min_confidence 0.7 \
+    --num_clients 20 \
+    --rounds 5 \
+    --llm_model_name Qwen3 \
+    --lora_target_modules q_proj,k_proj,v_proj,o_proj

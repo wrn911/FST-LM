@@ -197,5 +197,8 @@ def get_aggregator(aggregation_method: str, **kwargs):
     elif aggregation_method.lower() == 'llm_fedavg':
         from .simple_llm_aggregator import SimpleLLMAggregator
         return SimpleLLMAggregator(**kwargs)
+    elif aggregation_method.lower() == 'layer_aware_llm':
+        from .layer_aware_llm_aggregator import LayerAwareLLMAggregator
+        return LayerAwareLLMAggregator(**kwargs)
     else:
         raise ValueError(f"不支持的聚合方法: {aggregation_method}")

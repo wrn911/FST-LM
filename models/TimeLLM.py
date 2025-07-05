@@ -89,9 +89,6 @@ class Model(nn.Module):
 
         self.dropout = nn.Dropout(configs.dropout)
 
-        self.patch_embedding = PatchEmbedding(
-            configs.d_model, self.patch_len, self.stride, configs.dropout)
-
         self.ts2language = Embedding_layer(configs)
 
         self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
@@ -502,11 +499,9 @@ class Model(nn.Module):
 
     def _ensure_float32_layers(self):
         """确保所有非LLM层使用float32"""
-        self.mapping_layer = self.mapping_layer.float()
-        self.reprogramming_layer = self.reprogramming_layer.float()
         self.output_projection = self.output_projection.float()
         self.normalize_layers = self.normalize_layers.float()
-        self.patch_embedding = self.patch_embedding.float()
+        self.ts2language = self.ts2language.float()
 
 class Embedding_layer(nn.Module):
     def __init__(self, configs):

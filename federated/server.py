@@ -18,8 +18,8 @@ class FederatedServer:
         self.args = args
         self.device = torch.device(args.device)
 
-        # 聚合器（支持LLM聚合）
-        if args.aggregation == 'llm_fedavg':
+        # 聚合器（支持LLM聚合和层级感知聚合）
+        if args.aggregation in ['llm_fedavg', 'layer_aware_llm']:
             aggregator_kwargs = {
                 'api_key': getattr(args, 'llm_api_key', None),
                 'model_name': getattr(args, 'llm_model', 'DeepSeek-R1'),
@@ -27,6 +27,11 @@ class FederatedServer:
                 'min_confidence': getattr(args, 'llm_min_confidence', 0.7),
                 'is_lora_mode': hasattr(args, 'use_lora') and args.use_lora
             }
+
+            # 层级感知聚合的额外参数
+            if args.aggregation == 'layer_aware_llm':
+                aggregator_kwargs['layer_analysis_enabled'] = getattr(args, 'layer_analysis_enabled', True)
+
             self.aggregator = get_aggregator(args.aggregation, **aggregator_kwargs)
         else:
             self.aggregator = get_aggregator(args.aggregation)

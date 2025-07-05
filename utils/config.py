@@ -79,7 +79,7 @@ def get_args():
 
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='fedavg',
-                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg'],
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'layer_aware_llm'],
                         help='聚合算法')
     parser.add_argument('--use_coordinates', action='store_true',
                         help='是否使用坐标信息进行加权聚合')
@@ -93,6 +93,12 @@ def get_args():
                         help='LLM权重缓存轮数（1表示每轮都调用）')
     parser.add_argument('--llm_min_confidence', type=float, default=0.7,
                         help='LLM决策最小置信度阈值')
+
+    # === 层级感知聚合参数 ===
+    parser.add_argument('--layer_analysis_enabled', action='store_true',
+                        help='是否启用层级感知聚合分析')
+    parser.add_argument('--layer_aware_cache_rounds', type=int, default=1,
+                        help='层级感知聚合的缓存轮数')
 
     # === 系统参数 ===
     parser.add_argument('--device', type=str, default='auto',
