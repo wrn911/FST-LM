@@ -182,7 +182,6 @@ class SimpleLLMAggregator:
 请输出JSON格式的权重分配（总和严格等于1.0）：
 {{
   "weights": [0.15, 0.22, 0.18, ...],
-  "reasoning": "详细的决策理由，说明为什么这样分配权重",
   "confidence": 0.85
 }}
 
@@ -194,6 +193,7 @@ class SimpleLLMAggregator:
         """调用DeepSeek获取响应"""
         try:
             messages = [{"role": "user", "content": prompt}]
+            print(prompt)
             response = self.llm_client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -205,6 +205,7 @@ class SimpleLLMAggregator:
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     content += chunk.choices[0].delta.content
+                    print(chunk.choices[0].delta.content, end='')
 
             return content
         except Exception as e:

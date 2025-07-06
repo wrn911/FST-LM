@@ -386,7 +386,7 @@ class LayerAwareLLMAggregator:
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     content += chunk.choices[0].delta.content
-
+                    print(chunk.choices[0].delta.content, end='')
             return content
         except Exception as e:
             self.logger.error(f"LLM调用失败: {e}")

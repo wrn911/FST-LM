@@ -20,6 +20,7 @@ from utils.config import get_args
 from federated.client import FederatedClient
 from federated.server import FederatedServer
 from torch.utils.data import DataLoader
+from utils.utils import assign_model_to_client, cleanup_client_model
 
 
 class ModelConfig:
@@ -76,89 +77,66 @@ def set_seed(seed):
 
 
 def create_client_data_loaders(federated_data, args):
-    """为所有客户端创建数据加载器"""
+    """为所有客户端创建数据加载器 - 包含训练、验证、测试集"""
     client_loaders = {}
 
     for client_id, client_data in federated_data['clients'].items():
         sequences = client_data['sequences']
+        client_loaders[client_id] = {}
 
         # 训练集
-        X_train = torch.FloatTensor(sequences['train']['history'])
-        y_train = torch.FloatTensor(sequences['train']['target'])
-        train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=args.local_bs,
-            shuffle=True
-        )
+        if 'train' in sequences:
+            X_train = torch.FloatTensor(sequences['train']['history'])
+            y_train = torch.FloatTensor(sequences['train']['target'])
+            train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
+            client_loaders[client_id]['train'] = DataLoader(
+                train_dataset, batch_size=args.local_bs, shuffle=True
+            )
+            client_loaders[client_id]['num_samples'] = len(train_dataset)
 
-        client_loaders[client_id] = {
-            'train': train_loader,
-            'num_samples': len(train_dataset)
-        }
+        # 验证集
+        if 'val' in sequences:
+            X_val = torch.FloatTensor(sequences['val']['history'])
+            y_val = torch.FloatTensor(sequences['val']['target'])
+            val_dataset = torch.utils.data.TensorDataset(X_val, y_val)
+            client_loaders[client_id]['val'] = DataLoader(
+                val_dataset, batch_size=args.local_bs, shuffle=False
+            )
 
-        # 如果有测试集，也创建测试数据加载器
+        # 测试集
         if 'test' in sequences:
             X_test = torch.FloatTensor(sequences['test']['history'])
             y_test = torch.FloatTensor(sequences['test']['target'])
             test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
-            test_loader = DataLoader(
-                test_dataset,
-                batch_size=args.local_bs,
-                shuffle=False
+            client_loaders[client_id]['test'] = DataLoader(
+                test_dataset, batch_size=args.local_bs, shuffle=False
             )
-            client_loaders[client_id]['test'] = test_loader
 
     return client_loaders
 
 
 def create_federated_clients(federated_data, client_loaders, args):
-    """创建联邦客户端 - 改为共享模型方式"""
+    """创建联邦客户端 - 支持多种数据加载器"""
     clients = []
 
     for client_id in federated_data['clients'].keys():
-        # 创建客户端，但暂不分配模型（节省显存）
+        # 创建客户端，包含训练、验证、测试数据加载器
         client = FederatedClient(
             client_id=client_id,
             model=None,  # 暂时不分配模型
-            data_loader=client_loaders[client_id]['train'],
+            data_loader=client_loaders[client_id]['train'],  # 主要训练数据
             args=args
         )
+
+        # 添加验证和测试数据加载器
+        if 'val' in client_loaders[client_id]:
+            client.val_loader = client_loaders[client_id]['val']
+        if 'test' in client_loaders[client_id]:
+            client.test_loader = client_loaders[client_id]['test']
 
         clients.append(client)
 
     return clients
-
-
-def assign_model_to_client(client, model_template, global_params):
-    """为客户端分配模型"""
-    # 创建新的模型实例
-    client_model = Model(ModelConfig(client.args)).to(client.args.device)
-    client_model.load_state_dict(global_params)
-
-    # 分配给客户端
-    client.model = client_model
-    client.optimizer = torch.optim.Adam(
-        client.model.parameters(),
-        lr=client.args.lr,
-        weight_decay=client.args.weight_decay
-    )
-    client.criterion = torch.nn.MSELoss()
-
-
-def cleanup_client_model(client):
-    """清理客户端模型以释放显存"""
-    if client.model is not None:
-        del client.model
-        del client.optimizer
-        del client.criterion
-        client.model = None
-        client.optimizer = None
-        client.criterion = None
-
-    # 强制垃圾回收
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 
 def main():
@@ -213,41 +191,102 @@ def main():
         # 执行一轮联邦学习
         round_results = server.federated_round(clients, round_idx)
 
-        # 输出本轮结果
+        # 输出本轮结果（增强版）
         avg_loss = round_results['avg_client_loss']
         print(f"本轮平均客户端损失: {avg_loss:.6f}")
 
-        # 每隔一定轮数进行全局评估
+        # 如果有验证损失，也输出
+        if 'val_loss' in round_results:
+            print(f"本轮验证集损失: {round_results['val_loss']:.6f}")
+
+        # 每隔一定轮数进行全局评估（保持原有逻辑但输出更详细）
         if round_idx % args.eval_every == 0:
-            print("进行全局评估...")
+            print("进行全局模型评估...")
 
-            # 为评估临时分配模型
-            global_params = server.get_global_model()
-            eval_clients = clients[:min(5, len(clients))]  # 只用少数客户端评估以节省时间
+            eval_clients = clients[:min(10, len(clients))]  # 增加评估客户端数量
 
-            total_eval_loss = 0
-            for client in eval_clients:
-                assign_model_to_client(client, None, global_params)
-                eval_loss = client.evaluate()
-                total_eval_loss += eval_loss
-                cleanup_client_model(client)
+            # 验证集评估
+            if hasattr(eval_clients[0], 'val_loader'):
+                val_loss, val_client_losses = server.evaluate_global_model_detailed(eval_clients, 'val')
+                server.train_history['global_loss'].append(val_loss)
+                print(f"全局验证损失: {val_loss:.6f}")
 
-            global_loss = total_eval_loss / len(eval_clients)
-            server.train_history['global_loss'].append(global_loss)
-            print(f"全局模型损失: {global_loss:.6f}")
-
-            del global_params
+            # 如果也想看测试集表现（可选，但不用于模型选择）
+            if hasattr(eval_clients[0], 'test_loader') and round_idx % (args.eval_every * 2) == 0:
+                test_loss, _ = server.evaluate_global_model_detailed(eval_clients, 'test')
+                print(f"当前测试损失: {test_loss:.6f} (仅供参考)")
 
     print("\n联邦训练完成!")
 
+    # 最终测试集评估（如果已实现）
+    if hasattr(server, 'final_test_evaluation'):
+        final_results = server.final_test_evaluation(clients)
+
     # 输出训练摘要
     train_history = server.get_train_history()
+
+    print(f"\n{'=' * 60}")
+    print("训练摘要")
+    print(f"{'=' * 60}")
+
+    # 训练损失
+    final_client_loss = train_history['client_losses'][-1] if train_history['client_losses'] else float('inf')
+    print(f"最终平均客户端训练损失: {final_client_loss:.6f}")
+
+    # 验证损失
+    if 'val_losses' in train_history and train_history['val_losses']:
+        best_val_loss = min(train_history['val_losses'])
+        final_val_loss = train_history['val_losses'][-1]
+        print(f"最佳验证损失: {best_val_loss:.6f}")
+        print(f"最终验证损失: {final_val_loss:.6f}")
+
+    # 全局评估损失
     if train_history['global_loss']:
         best_global_loss = min(train_history['global_loss'])
         print(f"最佳全局损失: {best_global_loss:.6f}")
 
-    final_client_loss = train_history['client_losses'][-1] if train_history['client_losses'] else float('inf')
-    print(f"最终平均客户端损失: {final_client_loss:.6f}")
+    # 如果使用多维度LLM聚合，生成趋势分析
+    if args.aggregation == 'multi_dim_llm':
+        print(f"\n{'=' * 60}")
+        print("客户端学习趋势分析")
+        print(f"{'=' * 60}")
+
+        try:
+            from utils.trend_visualizer import visualize_trends
+            visualize_trends(server, args.save_dir)
+        except Exception as e:
+            print(f"趋势分析生成失败: {e}")
+            # 至少打印基本的趋势摘要
+            if hasattr(server, 'client_history') and server.client_history['losses']:
+                print(f"参与训练的客户端数量: {len(server.client_history['losses'])}")
+
+                # 显示各客户端的基本趋势信息
+                for client_id in server.client_history['losses'].keys():
+                    trend_summary = server.get_client_trend_summary(client_id)
+                    print(f"  客户端 {client_id}: {trend_summary['description']} (评分: {trend_summary['score']:.2f})")
+
+    # 保存详细结果
+    if hasattr(args, 'save_results') and args.save_results:
+        import json
+        results_to_save = {
+            'train_history': train_history,
+            'args': vars(args)
+        }
+
+        # 添加趋势分析结果
+        if args.aggregation == 'multi_dim_llm' and hasattr(server, 'client_history'):
+            results_to_save['client_trends'] = {}
+            for client_id in server.client_history['losses'].keys():
+                trend_summary = server.get_client_trend_summary(client_id)
+                results_to_save['client_trends'][client_id] = trend_summary
+
+        # 添加最终测试结果
+        if 'final_results' in locals():
+            results_to_save['final_test_results'] = final_results
+
+        with open(f"{args.save_dir}/training_results.json", 'w') as f:
+            json.dump(results_to_save, f, indent=2, default=str)
+        print(f"详细结果已保存至: {args.save_dir}/training_results.json")
 
 
 if __name__ == "__main__":

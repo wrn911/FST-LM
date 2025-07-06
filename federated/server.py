@@ -2,12 +2,13 @@
 """
 联邦学习服务器
 """
-
+import numpy as np
 import torch
 import random
 import copy
 from typing import List, Dict
 from .aggregation import get_aggregator
+from utils.utils import assign_model_to_client, cleanup_client_model
 
 
 class FederatedServer:
@@ -18,8 +19,8 @@ class FederatedServer:
         self.args = args
         self.device = torch.device(args.device)
 
-        # 聚合器（支持LLM聚合和层级感知聚合）
-        if args.aggregation in ['llm_fedavg', 'layer_aware_llm']:
+        # 聚合器（支持多种LLM聚合方式）
+        if args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm']:
             aggregator_kwargs = {
                 'api_key': getattr(args, 'llm_api_key', None),
                 'model_name': getattr(args, 'llm_model', 'DeepSeek-R1'),
@@ -27,6 +28,12 @@ class FederatedServer:
                 'min_confidence': getattr(args, 'llm_min_confidence', 0.7),
                 'is_lora_mode': hasattr(args, 'use_lora') and args.use_lora
             }
+
+            # 多维度聚合的额外参数
+            if args.aggregation == 'multi_dim_llm':
+                aggregator_kwargs['dimensions'] = getattr(args, 'multi_dim_dimensions',
+                                                          ['performance', 'geographic', 'traffic', 'trend'])
+                aggregator_kwargs['server_instance'] = self  # 传递服务器实例引用
 
             # 层级感知聚合的额外参数
             if args.aggregation == 'layer_aware_llm':
@@ -40,6 +47,14 @@ class FederatedServer:
         self.train_history = {
             'global_loss': [],
             'client_losses': []
+        }
+
+        # 新增：客户端历史数据跟踪
+        self.client_history = {
+            'losses': {},  # {client_id: [loss1, loss2, ...]}
+            'performance_trends': {},  # {client_id: [trend1, trend2, ...]}
+            'participation_count': {},  # {client_id: count}
+            'last_seen_round': {}  # {client_id: round_idx}
         }
 
     def get_global_model(self):
@@ -67,7 +82,7 @@ class FederatedServer:
     def aggregate_models(self, client_models: List[Dict], client_info: List[Dict],
                          selected_clients: List = None, round_idx: int = 0):
         """
-        聚合客户端模型（支持LLM聚合）
+        聚合客户端模型（支持多种LLM聚合）
 
         Args:
             client_models: 客户端模型参数列表
@@ -78,7 +93,7 @@ class FederatedServer:
         Returns:
             aggregated_model: 聚合后的模型参数
         """
-        if self.args.aggregation == 'llm_fedavg' and selected_clients:
+        if self.args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm'] and selected_clients:
             # 准备LLM聚合需要的统计信息
             client_stats = self._prepare_client_statistics(
                 selected_clients, client_info, round_idx
@@ -220,16 +235,351 @@ class FederatedServer:
         avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
         return avg_loss
 
-    def federated_round(self, all_clients: List, round_idx: int):
+    def evaluate_global_model_detailed(self, test_clients: List, eval_type='val'):
         """
-        执行一轮联邦学习 - 优化显存使用
+        详细评估全局模型性能
 
         Args:
-            all_clients: 所有客户端列表
-            round_idx: 当前轮次
+            test_clients: 测试客户端列表
+            eval_type: 评估类型 ('val' 或 'test')
 
         Returns:
-            round_results: 本轮训练结果
+            avg_loss: 平均损失
+            client_losses: 各客户端损失详情
+        """
+        total_loss = 0
+        total_samples = 0
+        client_losses = {}
+
+        # 获取全局模型参数
+        global_params = self.get_global_model()
+
+        for client in test_clients:
+            # 设置全局模型参数
+            assign_model_to_client(client, None, global_params)  # 直接使用导入的函数
+
+            # 根据评估类型选择数据加载器
+            if eval_type == 'val' and hasattr(client, 'val_loader'):
+                eval_loader = client.val_loader
+            elif eval_type == 'test' and hasattr(client, 'test_loader'):
+                eval_loader = client.test_loader
+            else:
+                eval_loader = client.data_loader  # 默认使用训练数据
+
+            # 评估客户端
+            client_loss = client.evaluate(eval_loader)
+            client_samples = len(eval_loader.dataset)
+
+            total_loss += client_loss * client_samples
+            total_samples += client_samples
+            client_losses[client.client_id] = client_loss
+
+            # 清理客户端模型
+            cleanup_client_model(client)  # 直接使用导入的函数
+
+        avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
+
+        # 清理全局参数
+        del global_params
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return avg_loss, client_losses
+
+    def final_test_evaluation(self, test_clients: List):
+        """
+        最终测试集评估
+
+        Args:
+            test_clients: 测试客户端列表
+
+        Returns:
+            comprehensive_results: 综合评估结果
+        """
+        print("\n" + "=" * 60)
+        print("最终测试集评估")
+        print("=" * 60)
+
+        # 测试集评估
+        test_loss, test_client_losses = self.evaluate_global_model_detailed(test_clients, 'test')
+
+        # 为了对比，也计算验证集损失
+        val_loss, val_client_losses = self.evaluate_global_model_detailed(test_clients, 'val')
+
+        # 计算统计信息
+        test_losses = list(test_client_losses.values())
+        val_losses = list(val_client_losses.values())
+
+        results = {
+            'test_loss': {
+                'avg': test_loss,
+                'std': np.std(test_losses),
+                'min': min(test_losses),
+                'max': max(test_losses),
+                'client_losses': test_client_losses
+            },
+            'val_loss': {
+                'avg': val_loss,
+                'std': np.std(val_losses),
+                'min': min(val_losses),
+                'max': max(val_losses),
+                'client_losses': val_client_losses
+            }
+        }
+
+        # 打印结果
+        print(f"测试集平均损失: {test_loss:.6f} (±{np.std(test_losses):.6f})")
+        print(f"验证集平均损失: {val_loss:.6f} (±{np.std(val_losses):.6f})")
+        print(f"测试集损失范围: [{min(test_losses):.6f}, {max(test_losses):.6f}]")
+
+        # 找出表现最好和最差的客户端
+        best_test_client = min(test_client_losses.items(), key=lambda x: x[1])
+        worst_test_client = max(test_client_losses.items(), key=lambda x: x[1])
+
+        print(f"测试集最佳客户端: {best_test_client[0]} (损失: {best_test_client[1]:.6f})")
+        print(f"测试集最差客户端: {worst_test_client[0]} (损失: {worst_test_client[1]:.6f})")
+
+        return results
+
+    def update_client_history(self, selected_clients: List, client_losses: List[float], round_idx: int):
+        """更新客户端历史数据"""
+        for client, loss in zip(selected_clients, client_losses):
+            client_id = str(client.client_id)
+
+            # 更新损失历史
+            if client_id not in self.client_history['losses']:
+                self.client_history['losses'][client_id] = []
+            self.client_history['losses'][client_id].append(float(loss))
+
+            # 保持最近N轮的历史（避免内存过度增长）
+            max_history = 20
+            if len(self.client_history['losses'][client_id]) > max_history:
+                self.client_history['losses'][client_id] = self.client_history['losses'][client_id][-max_history:]
+
+            # 更新参与次数
+            if client_id not in self.client_history['participation_count']:
+                self.client_history['participation_count'][client_id] = 0
+            self.client_history['participation_count'][client_id] += 1
+
+            # 更新最后参与轮次
+            self.client_history['last_seen_round'][client_id] = round_idx
+
+            # 计算并存储性能趋势
+            self._calculate_and_store_trend(client_id, round_idx)
+
+    def _calculate_and_store_trend(self, client_id: str, round_idx: int):
+        """计算并存储客户端性能趋势"""
+        losses = self.client_history['losses'][client_id]
+
+        if len(losses) < 2:
+            trend_info = {
+                'short_term': 'stable',
+                'long_term': 'stable',
+                'slope': 0.0,
+                'volatility': 0.0,
+                'improvement_rate': 0.0
+            }
+        else:
+            trend_info = self._analyze_loss_trend(losses)
+
+        # 存储趋势信息
+        if client_id not in self.client_history['performance_trends']:
+            self.client_history['performance_trends'][client_id] = []
+
+        self.client_history['performance_trends'][client_id].append({
+            'round': round_idx,
+            'trend_info': trend_info
+        })
+
+    def _analyze_loss_trend(self, losses: List[float]) -> Dict:
+        """分析损失趋势的详细信息"""
+        import numpy as np
+
+        losses_array = np.array(losses)
+        n = len(losses_array)
+
+        # 1. 短期趋势（最近3-5轮）
+        short_term_window = min(5, n)
+        recent_losses = losses_array[-short_term_window:]
+        short_term_trend = self._get_trend_direction(recent_losses)
+
+        # 2. 长期趋势（所有历史）
+        long_term_trend = self._get_trend_direction(losses_array)
+
+        # 3. 计算线性回归斜率
+        if n >= 3:
+            x = np.arange(n)
+            slope, _ = np.polyfit(x, losses_array, 1)
+        else:
+            slope = 0.0
+
+        # 4. 计算波动性（标准差）
+        volatility = float(np.std(losses_array)) if n > 1 else 0.0
+
+        # 5. 计算改进率（相对于初始损失的改进百分比）
+        if n >= 2 and losses_array[0] != 0:
+            improvement_rate = (losses_array[0] - losses_array[-1]) / losses_array[0] * 100
+        else:
+            improvement_rate = 0.0
+
+        # 6. 计算趋势强度
+        trend_strength = self._calculate_trend_strength(losses_array)
+
+        return {
+            'short_term': short_term_trend,
+            'long_term': long_term_trend,
+            'slope': float(slope),
+            'volatility': volatility,
+            'improvement_rate': improvement_rate,
+            'trend_strength': trend_strength,
+            'consistency': self._calculate_consistency(losses_array)
+        }
+
+    def _get_trend_direction(self, losses: np.ndarray) -> str:
+        """获取趋势方向"""
+        if len(losses) < 2:
+            return 'stable'
+
+        # 使用线性回归斜率判断趋势
+        x = np.arange(len(losses))
+        slope, _ = np.polyfit(x, losses, 1)
+
+        # 设置阈值来判断趋势
+        if slope < -0.005:  # 明显下降
+            return 'improving'
+        elif slope > 0.005:  # 明显上升
+            return 'deteriorating'
+        else:
+            return 'stable'
+
+    def _calculate_trend_strength(self, losses: np.ndarray) -> float:
+        """计算趋势强度（0-1之间，1表示趋势非常明显）"""
+        if len(losses) < 3:
+            return 0.0
+
+        # 使用相关系数的绝对值作为趋势强度
+        x = np.arange(len(losses))
+        correlation_matrix = np.corrcoef(x, losses)
+        correlation = abs(correlation_matrix[0, 1])
+
+        return float(correlation) if not np.isnan(correlation) else 0.0
+
+    def _calculate_consistency(self, losses: np.ndarray) -> float:
+        """计算学习一致性（波动小=一致性高）"""
+        if len(losses) < 2:
+            return 1.0
+
+        # 计算相对标准差（变异系数）
+        mean_loss = np.mean(losses)
+        if mean_loss == 0:
+            return 1.0
+
+        cv = np.std(losses) / mean_loss
+        # 将变异系数转换为一致性分数（0-1之间，1表示最一致）
+        consistency = 1.0 / (1.0 + cv)
+
+        return float(consistency)
+
+    def get_client_trend_summary(self, client_id: str) -> Dict:
+        """获取客户端趋势摘要"""
+        client_id = str(client_id)
+
+        if client_id not in self.client_history['losses']:
+            return {
+                'status': 'new_client',
+                'description': 'new',
+                'score': 1.0,
+                'details': {}
+            }
+
+        losses = self.client_history['losses'][client_id]
+        participation = self.client_history['participation_count'].get(client_id, 0)
+
+        if len(losses) < 2:
+            return {
+                'status': 'insufficient_data',
+                'description': 'stable',
+                'score': 1.0,
+                'details': {'participation_count': participation}
+            }
+
+        # 获取最新的趋势分析
+        trend_info = self._analyze_loss_trend(losses)
+
+        # 计算综合趋势评分
+        trend_score = self._calculate_trend_score(trend_info, participation)
+
+        # 生成趋势描述
+        description = self._generate_trend_description(trend_info)
+
+        return {
+            'status': 'analyzed',
+            'description': description,
+            'score': trend_score,
+            'details': {
+                'participation_count': participation,
+                'trend_info': trend_info,
+                'recent_losses': losses[-5:],  # 最近5轮损失
+            }
+        }
+
+    def _calculate_trend_score(self, trend_info: Dict, participation: int) -> float:
+        """计算趋势评分（用于聚合权重计算）"""
+        base_score = 1.0
+
+        # 1. 趋势方向评分
+        if trend_info['short_term'] == 'improving':
+            trend_bonus = 0.3
+        elif trend_info['short_term'] == 'deteriorating':
+            trend_bonus = -0.2
+        else:
+            trend_bonus = 0.0
+
+        # 2. 改进率评分
+        improvement_bonus = min(0.2, trend_info['improvement_rate'] / 100)
+
+        # 3. 一致性评分
+        consistency_bonus = (trend_info['consistency'] - 0.5) * 0.2
+
+        # 4. 参与度评分（参与次数越多，越可信）
+        participation_bonus = min(0.1, participation / 20 * 0.1)
+
+        # 5. 趋势强度评分
+        strength_bonus = trend_info['trend_strength'] * 0.1
+
+        final_score = base_score + trend_bonus + improvement_bonus + consistency_bonus + participation_bonus + strength_bonus
+
+        # 确保评分在合理范围内
+        return max(0.1, min(2.0, final_score))
+
+    def _generate_trend_description(self, trend_info: Dict) -> str:
+        """生成趋势描述"""
+        short_term = trend_info['short_term']
+        long_term = trend_info['long_term']
+        improvement_rate = trend_info['improvement_rate']
+        consistency = trend_info['consistency']
+
+        if short_term == 'improving' and long_term == 'improving':
+            if improvement_rate > 10:
+                return 'strongly_improving'
+            else:
+                return 'improving'
+        elif short_term == 'deteriorating' and long_term == 'deteriorating':
+            return 'deteriorating'
+        elif short_term != long_term:
+            if consistency > 0.7:
+                return f'recently_{short_term}'
+            else:
+                return 'unstable'
+        else:
+            if consistency > 0.8:
+                return 'stable_good'
+            else:
+                return 'stable'
+
+    def federated_round(self, all_clients: List, round_idx: int):
+        """
+        执行一轮联邦学习 - 优化显存使用并记录历史数据
         """
         # 1. 选择客户端
         selected_clients = self.select_clients(all_clients, round_idx)
@@ -238,7 +588,7 @@ class FederatedServer:
         # 2. 获取全局模型参数
         global_params = self.get_global_model()
 
-        # 3. 客户端本地训练（逐个进行以节省显存）
+        # 3. 客户端本地训练
         client_models = []
         client_info = []
         client_losses = []
@@ -247,7 +597,7 @@ class FederatedServer:
             print(f"  训练客户端 {client.client_id} ({i + 1}/{len(selected_clients)})")
 
             # 为客户端分配模型
-            from federated_train import assign_model_to_client, cleanup_client_model
+            from utils.utils import assign_model_to_client, cleanup_client_model
             assign_model_to_client(client, None, global_params)
 
             # 本地训练
@@ -263,7 +613,10 @@ class FederatedServer:
             # 立即清理客户端模型以释放显存
             cleanup_client_model(client)
 
-        # 4. 聚合模型
+        # 4. 更新客户端历史数据（在聚合之前）
+        self.update_client_history(selected_clients, client_losses, round_idx)
+
+        # 5. 聚合模型
         aggregated_params = self.aggregate_models(
             client_models, client_info, selected_clients, round_idx
         )
@@ -272,17 +625,26 @@ class FederatedServer:
         if self._is_lora_mode():
             self._log_communication_efficiency(client_models, selected_clients)
 
-        # 5. 更新全局模型
+        # 6. 更新全局模型
         self.update_global_model(aggregated_params)
 
-        # 6. 清理聚合过程中的临时数据
+        # 7. 清理聚合过程中的临时数据
         del client_models, global_params, aggregated_params
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # 7. 记录训练历史
+        # 8. 记录训练历史（增强版）
         avg_client_loss = sum(client_losses) / len(client_losses)
         self.train_history['client_losses'].append(avg_client_loss)
+
+        # 如果有验证集，计算验证损失
+        if hasattr(selected_clients[0], 'val_loader'):
+            print("计算验证集损失...")
+            val_loss, _ = self.evaluate_global_model_detailed(selected_clients[:5], 'val')
+            if 'val_losses' not in self.train_history:
+                self.train_history['val_losses'] = []
+            self.train_history['val_losses'].append(val_loss)
+            print(f"验证集损失: {val_loss:.6f}")
 
         round_results = {
             'selected_clients': [c.client_id for c in selected_clients],
@@ -290,12 +652,32 @@ class FederatedServer:
             'client_losses': dict(zip([c.client_id for c in selected_clients], client_losses))
         }
 
-        # 如果是LoRA+LLM模式，添加额外信息
-        if self.args.aggregation == 'llm_fedavg' and self._is_lora_mode():
-            round_results['mode'] = 'LoRA + LLM智能聚合'
+        # 添加验证损失到结果中
+        if 'val_losses' in self.train_history and self.train_history['val_losses']:
+            round_results['val_loss'] = self.train_history['val_losses'][-1]
+
+        # 如果是多维度LLM模式，添加趋势分析信息
+        if self.args.aggregation == 'multi_dim_llm':
+            round_results['mode'] = 'LoRA + 多维度LLM智能聚合'
             round_results['communication_efficiency'] = '99%+'
+            round_results['trend_analysis'] = self._get_round_trend_summary(selected_clients)
 
         return round_results
+
+    def _get_round_trend_summary(self, selected_clients: List) -> Dict:
+        """获取本轮的趋势分析摘要"""
+        trend_summary = {}
+
+        for client in selected_clients:
+            client_id = str(client.client_id)
+            trend_info = self.get_client_trend_summary(client_id)
+            trend_summary[client_id] = {
+                'description': trend_info['description'],
+                'score': trend_info['score'],
+                'participation': trend_info['details'].get('participation_count', 0)
+            }
+
+        return trend_summary
 
     def get_train_history(self):
         """获取训练历史"""

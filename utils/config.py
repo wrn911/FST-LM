@@ -79,10 +79,23 @@ def get_args():
 
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='fedavg',
-                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'layer_aware_llm'],
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'layer_aware_llm', 'multi_dim_llm'],# 添加multi_dim_llm
                         help='聚合算法')
     parser.add_argument('--use_coordinates', action='store_true',
                         help='是否使用坐标信息进行加权聚合')
+
+    # === 多维度LLM聚合参数 ===
+    parser.add_argument('--multi_dim_dimensions', type=str,
+                        default='performance,geographic,traffic,trend',
+                        help='多维度聚合的评分维度，逗号分隔')
+    parser.add_argument('--performance_weight', type=float, default=0.4,
+                        help='性能维度权重')
+    parser.add_argument('--geographic_weight', type=float, default=0.25,
+                        help='地理维度权重')
+    parser.add_argument('--traffic_weight', type=float, default=0.25,
+                        help='流量维度权重')
+    parser.add_argument('--trend_weight', type=float, default=0.1,
+                        help='趋势维度权重')
 
     # === LLM聚合参数 ===
     parser.add_argument('--llm_api_key', type=str, default="sk-93nWYhI8SrnXad5m9932CeBdDeDf4233B21d93D217095f22",
@@ -126,6 +139,10 @@ def get_args():
     # 处理LoRA目标模块
     if args.lora_target_modules:
         args.lora_target_modules = [m.strip() for m in args.lora_target_modules.split(',')]
+
+    # 处理多维度聚合参数
+    if args.multi_dim_dimensions:
+        args.multi_dim_dimensions = [d.strip() for d in args.multi_dim_dimensions.split(',')]
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
