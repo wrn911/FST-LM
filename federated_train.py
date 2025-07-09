@@ -116,16 +116,23 @@ def create_client_data_loaders(federated_data, args):
 
 
 def create_federated_clients(federated_data, client_loaders, args):
-    """创建联邦客户端 - 支持多种数据加载器"""
+    """创建联邦客户端 - 支持多种数据加载器和真实数据"""
     clients = []
 
     for client_id in federated_data['clients'].keys():
-        # 创建客户端，包含训练、验证、测试数据加载器
+        # 获取该客户端的真实坐标和流量统计信息
+        client_data = federated_data['clients'][client_id]
+        coordinates = client_data['coordinates']
+        original_traffic_stats = client_data['original_traffic_stats']
+
+        # 创建客户端，传递真实的坐标和流量数据
         client = FederatedClient(
             client_id=client_id,
             model=None,  # 暂时不分配模型
             data_loader=client_loaders[client_id]['train'],  # 主要训练数据
-            args=args
+            args=args,
+            coordinates=coordinates,  # 真实坐标
+            original_traffic_stats=original_traffic_stats  # 真实流量统计
         )
 
         # 添加验证和测试数据加载器
@@ -159,18 +166,36 @@ def main():
     print("\n加载联邦数据...")
     federated_data, _ = get_federated_data(args)
 
+    # 验证和展示真实数据（新增）
+    from utils.utils import validate_real_data, print_real_data_summary
+
+    if validate_real_data(federated_data):
+        print_real_data_summary(federated_data)
+    else:
+        print("数据验证失败，请检查数据文件")
+        return
+
     # 创建客户端数据加载器
-    print("创建客户端数据加载器...")
+    print("\n创建客户端数据加载器...")
     client_loaders = create_client_data_loaders(federated_data, args)
 
     # 初始化全局模型
     print("初始化全局模型...")
     global_model = Model(ModelConfig(args)).to(args.device)
 
-    # 创建联邦客户端
+    # 创建联邦客户端（现在会传递真实数据）
     print("创建联邦客户端...")
     clients = create_federated_clients(federated_data, client_loaders, args)
     print(f"成功创建 {len(clients)} 个客户端")
+
+    # 打印客户端真实数据样本（新增）
+    print("\n客户端真实数据样本:")
+    sample_client = clients[0]
+    print(f"  基站 {sample_client.client_id}:")
+    print(f"    坐标: ({sample_client.coordinates['lng']:.3f}, {sample_client.coordinates['lat']:.3f})")
+    traffic_stats = sample_client.get_real_traffic_stats()
+    print(f"    流量统计: 均值={traffic_stats['mean']:.1f}, 趋势={traffic_stats['trend']}")
+    print(f"    变异系数: {traffic_stats.get('coefficient_of_variation', 0):.3f}")
 
     # 创建联邦服务器
     server = FederatedServer(global_model, args)

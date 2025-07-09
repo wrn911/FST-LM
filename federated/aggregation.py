@@ -200,8 +200,11 @@ def get_aggregator(aggregation_method: str, **kwargs):
     elif aggregation_method.lower() == 'layer_aware_llm':
         from .layer_aware_llm_aggregator import LayerAwareLLMAggregator
         return LayerAwareLLMAggregator(**kwargs)
-    elif aggregation_method.lower() == 'multi_dim_llm':  # 新增的多维度聚合器
+    elif aggregation_method.lower() == 'multi_dim_llm':
         from .multi_dimensional_llm_aggregator import MultiDimensionalLLMAggregator
         return MultiDimensionalLLMAggregator(**kwargs)
+    elif aggregation_method.lower() == 'enhanced_multi_dim_llm':  # 新增
+        from .enhanced_multi_dimensional_llm_aggregator import EnhancedMultiDimensionalLLMAggregator
+        return EnhancedMultiDimensionalLLMAggregator(**kwargs)
     else:
         raise ValueError(f"不支持的聚合方法: {aggregation_method}")

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-联邦学习客户端
+联邦学习客户端 - 添加真实坐标和流量数据支持
 """
 
 import torch
@@ -13,12 +13,16 @@ from tqdm import tqdm
 class FederatedClient:
     """联邦学习客户端"""
 
-    def __init__(self, client_id, model, data_loader, args):
+    def __init__(self, client_id, model, data_loader, args, coordinates=None, original_traffic_stats=None):
         self.client_id = client_id
         self.model = model
         self.data_loader = data_loader
         self.args = args
         self.device = torch.device(args.device)
+
+        # 存储真实的坐标和流量统计信息
+        self.coordinates = coordinates or {'lng': 0.0, 'lat': 0.0}
+        self.original_traffic_stats = original_traffic_stats or {}
 
         # 这些将在需要时动态创建
         self.optimizer = None
@@ -148,3 +152,11 @@ class FederatedClient:
             'client_id': self.client_id,
             'num_samples': self.num_samples
         }
+
+    def get_real_traffic_stats(self):
+        """获取真实流量统计信息（供LLM聚合使用）"""
+        return self.original_traffic_stats
+
+    def get_coordinates(self):
+        """获取真实坐标信息（供LLM聚合使用）"""
+        return self.coordinates

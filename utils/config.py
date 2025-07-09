@@ -30,7 +30,7 @@ def get_args():
                         help='验证集天数')
 
     # === 联邦学习参数 ===
-    parser.add_argument('--num_clients', type=int, default=50,
+    parser.add_argument('--num_clients', type=int, default=10,
                         help='参与联邦学习的基站数量')
     parser.add_argument('--frac', type=float, default=0.3,
                         help='每轮参与训练的客户端比例')
@@ -78,29 +78,42 @@ def get_args():
                         help='早停耐心值')
 
     # === 聚合参数 ===
-    parser.add_argument('--aggregation', type=str, default='fedavg',
-                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'layer_aware_llm', 'multi_dim_llm'],# 添加multi_dim_llm
+    parser.add_argument('--aggregation', type=str, default='enhanced_multi_dim_llm',
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg',
+                                 'layer_aware_llm', 'multi_dim_llm', 'enhanced_multi_dim_llm'],  # 新增选项
                         help='聚合算法')
-    parser.add_argument('--use_coordinates', action='store_true',
-                        help='是否使用坐标信息进行加权聚合')
 
-    # === 多维度LLM聚合参数 ===
-    parser.add_argument('--multi_dim_dimensions', type=str,
-                        default='performance,geographic,traffic,trend',
-                        help='多维度聚合的评分维度，逗号分隔')
-    parser.add_argument('--performance_weight', type=float, default=0.4,
-                        help='性能维度权重')
-    parser.add_argument('--geographic_weight', type=float, default=0.25,
-                        help='地理维度权重')
-    parser.add_argument('--traffic_weight', type=float, default=0.25,
-                        help='流量维度权重')
-    parser.add_argument('--trend_weight', type=float, default=0.1,
-                        help='趋势维度权重')
+    # === 增强版多维度LLM聚合参数 ===
+    parser.add_argument('--enhanced_multi_dim_dimensions', type=str,
+                        default='model_performance,data_quality,spatial_distribution,temporal_stability,traffic_pattern',
+                        help='增强版多维度聚合的评分维度，逗号分隔（5个实用专家）')
+
+    # 各维度初始权重（5个专家）
+    parser.add_argument('--model_performance_weight', type=float, default=0.35,
+                        help='模型性能维度权重')
+    parser.add_argument('--data_quality_weight', type=float, default=0.25,
+                        help='数据质量维度权重')
+    parser.add_argument('--spatial_distribution_weight', type=float, default=0.15,
+                        help='空间分布维度权重')
+    parser.add_argument('--temporal_stability_weight', type=float, default=0.15,
+                        help='时序稳定性维度权重')
+    parser.add_argument('--traffic_pattern_weight', type=float, default=0.10,
+                        help='流量模式维度权重')
+
+    # 评分策略参数
+    parser.add_argument('--enable_dimension_analysis', action='store_true',
+                        help='是否启用维度分析日志')
+    parser.add_argument('--expert_verbose', action='store_true', default=True,
+                        help='是否显示详细的专家决策过程')
+    parser.add_argument('--expert_temperature', type=float, default=1.2,
+                        help='专家评分的softmax温度参数')
+    parser.add_argument('--quality_threshold', type=float, default=0.5,
+                        help='数据质量阈值（变异系数）')
 
     # === LLM聚合参数 ===
-    parser.add_argument('--llm_api_key', type=str, default="sk-93nWYhI8SrnXad5m9932CeBdDeDf4233B21d93D217095f22",
+    parser.add_argument('--llm_api_key', type=str, default="118aea86606f4e2f82750c54d3bb380c.DxtxnaKQhFz5EHPY",
                         help='DeepSeek API密钥 (用于智能聚合)')
-    parser.add_argument('--llm_model', type=str, default='DeepSeek-R1',
+    parser.add_argument('--llm_model', type=str, default='glm-4-flash-250414',
                         help='使用的LLM模型名称')
     parser.add_argument('--llm_cache_rounds', type=int, default=1,
                         help='LLM权重缓存轮数（1表示每轮都调用）')
@@ -140,9 +153,9 @@ def get_args():
     if args.lora_target_modules:
         args.lora_target_modules = [m.strip() for m in args.lora_target_modules.split(',')]
 
-    # 处理多维度聚合参数
-    if args.multi_dim_dimensions:
-        args.multi_dim_dimensions = [d.strip() for d in args.multi_dim_dimensions.split(',')]
+    # 处理增强版多维度聚合参数
+    if args.enhanced_multi_dim_dimensions:
+        args.enhanced_multi_dim_dimensions = [d.strip() for d in args.enhanced_multi_dim_dimensions.split(',')]
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)

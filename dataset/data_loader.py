@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-联邦学习数据加载和预处理模块
+联邦学习数据加载和预处理模块 - 添加原始流量统计
 """
 
 import h5py
@@ -21,6 +21,7 @@ class FederatedDataLoader:
         self.args = args
         self.selected_cells = None
         self.cell_coordinates = None
+        self.original_traffic_stats = None  # 新增：原始流量统计
         self.logger = logging.getLogger(__name__)
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
@@ -71,6 +72,9 @@ class FederatedDataLoader:
         self.logger.info(f"选中基站数量: {len(self.selected_cells)}")
         self.logger.info(f"选中基站ID前5个: {self.selected_cells[:5]}")
 
+        # 计算原始流量统计（在标准化之前）
+        self._calculate_original_traffic_stats(df_selected)
+
         # 数据标准化
         normalized_df = self._normalize_data(df_selected)
 
@@ -92,9 +96,69 @@ class FederatedDataLoader:
 
         # 获取选中基站的坐标
         self.cell_coordinates = {
-            cell_id: {'lng': lng[idx], 'lat': lat[idx]}
+            cell_id: {'lng': float(lng[idx]), 'lat': float(lat[idx])}
             for cell_id, idx in zip(self.selected_cells, selected_cells_idx)
         }
+
+    def _calculate_original_traffic_stats(self, df: pd.DataFrame):
+        """计算原始流量统计信息"""
+        self.logger.info("计算原始流量统计...")
+
+        self.original_traffic_stats = {}
+
+        for cell_id in self.selected_cells:
+            cell_data = df[cell_id]
+
+            # 基本统计量
+            mean_traffic = float(cell_data.mean())
+            std_traffic = float(cell_data.std())
+            min_traffic = float(cell_data.min())
+            max_traffic = float(cell_data.max())
+            median_traffic = float(cell_data.median())
+
+            # 计算趋势 - 使用线性回归斜率
+            time_index = np.arange(len(cell_data))
+            if len(cell_data) > 1:
+                slope, _ = np.polyfit(time_index, cell_data.values, 1)
+                if slope > 0.01:  # 阈值可以调整
+                    trend = 'increasing'
+                elif slope < -0.01:
+                    trend = 'decreasing'
+                else:
+                    trend = 'stable'
+            else:
+                trend = 'stable'
+                slope = 0.0
+
+            # 计算最近期的趋势（最后30%的数据）
+            recent_window = max(1, int(len(cell_data) * 0.3))
+            recent_data = cell_data.iloc[-recent_window:]
+            recent_mean = float(recent_data.mean())
+
+            # 计算波动性（变异系数）
+            cv = std_traffic / mean_traffic if mean_traffic > 0 else 0.0
+
+            # 计算峰值特征
+            q75 = float(cell_data.quantile(0.75))
+            q25 = float(cell_data.quantile(0.25))
+
+            self.original_traffic_stats[cell_id] = {
+                'mean': mean_traffic,
+                'std': std_traffic,
+                'min': min_traffic,
+                'max': max_traffic,
+                'median': median_traffic,
+                'trend': trend,
+                'trend_slope': float(slope),
+                'recent_mean': recent_mean,
+                'coefficient_of_variation': float(cv),
+                'q25': q25,
+                'q75': q75,
+                'iqr': q75 - q25,
+                'data_points': len(cell_data)
+            }
+
+        self.logger.info("原始流量统计计算完成")
 
     def _normalize_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Z-score标准化"""
@@ -184,6 +248,7 @@ class FederatedDataLoader:
         federated_data = {
             'clients': {},
             'coordinates': self.cell_coordinates,
+            'original_traffic_stats': self.original_traffic_stats,  # 新增
             'metadata': {
                 'num_clients': len(self.selected_cells),
                 'client_ids': self.selected_cells,
@@ -199,6 +264,7 @@ class FederatedDataLoader:
             federated_data['clients'][cell_id] = {
                 'sequences': sequences,
                 'coordinates': self.cell_coordinates[cell_id],
+                'original_traffic_stats': self.original_traffic_stats[cell_id],  # 新增
                 'data_stats': {
                     'train_samples': len(sequences['train']['history']),
                     'test_samples': len(sequences['test']['history']),

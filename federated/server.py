@@ -20,7 +20,7 @@ class FederatedServer:
         self.device = torch.device(args.device)
 
         # 聚合器（支持多种LLM聚合方式）
-        if args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm']:
+        if args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm', 'enhanced_multi_dim_llm']:
             aggregator_kwargs = {
                 'api_key': getattr(args, 'llm_api_key', None),
                 'model_name': getattr(args, 'llm_model', 'DeepSeek-R1'),
@@ -29,14 +29,22 @@ class FederatedServer:
                 'is_lora_mode': hasattr(args, 'use_lora') and args.use_lora
             }
 
+            # 增强版多维度聚合的额外参数
+            if args.aggregation == 'enhanced_multi_dim_llm':
+                aggregator_kwargs['dimensions'] = getattr(args, 'enhanced_multi_dim_dimensions',
+                                                          ['model_performance', 'data_quality', 'spatial_distribution',
+                                                           'temporal_stability', 'traffic_pattern'])
+                aggregator_kwargs['server_instance'] = self  # 传递服务器实例引用
+                aggregator_kwargs['verbose'] = getattr(args, 'expert_verbose', True)  # 新增：控制详细输出
+
             # 多维度聚合的额外参数
-            if args.aggregation == 'multi_dim_llm':
+            elif args.aggregation == 'multi_dim_llm':
                 aggregator_kwargs['dimensions'] = getattr(args, 'multi_dim_dimensions',
                                                           ['performance', 'geographic', 'traffic', 'trend'])
                 aggregator_kwargs['server_instance'] = self  # 传递服务器实例引用
 
             # 层级感知聚合的额外参数
-            if args.aggregation == 'layer_aware_llm':
+            elif args.aggregation == 'layer_aware_llm':
                 aggregator_kwargs['layer_analysis_enabled'] = getattr(args, 'layer_analysis_enabled', True)
 
             self.aggregator = get_aggregator(args.aggregation, **aggregator_kwargs)
@@ -93,7 +101,7 @@ class FederatedServer:
         Returns:
             aggregated_model: 聚合后的模型参数
         """
-        if self.args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm'] and selected_clients:
+        if self.args.aggregation in ['llm_fedavg', 'layer_aware_llm', 'multi_dim_llm', 'enhanced_multi_dim_llm'] and selected_clients:
             # 准备LLM聚合需要的统计信息
             client_stats = self._prepare_client_statistics(
                 selected_clients, client_info, round_idx
@@ -113,29 +121,43 @@ class FederatedServer:
         return aggregated_model
 
     def _prepare_client_statistics(self, selected_clients: List, client_info: List[Dict], round_idx: int):
-        """准备LLM聚合需要的客户端统计信息"""
+        """准备LLM聚合需要的客户端统计信息 - 使用真实数据"""
         from .simple_llm_aggregator import create_client_statistics
-        import random
 
         client_stats = []
 
         for i, client in enumerate(selected_clients):
             client_id = str(client.client_id)  # 确保是字符串
 
-            # 获取坐标信息（使用Python原生float类型）
+            # 获取真实坐标信息
+            coordinates = client.get_coordinates()
+            # 确保坐标是Python float类型
             coordinates = {
-                'lng': float(116.0 + random.uniform(-2, 2)),  # 北京附近
-                'lat': float(39.5 + random.uniform(-2, 2))
+                'lng': float(coordinates.get('lng', 0.0)),
+                'lat': float(coordinates.get('lat', 0.0))
             }
 
             # 获取最近的训练损失（确保是Python float）
             loss = float(getattr(client, 'last_loss', 1.0))
 
-            # 简单的流量统计（使用Python原生类型）
+            # 获取真实的流量统计信息
+            real_traffic_stats = client.get_real_traffic_stats()
+
+            # 转换为LLM聚合需要的格式（确保都是Python原生类型）
             traffic_stats = {
-                'mean': float(random.uniform(100, 500)),
-                'std': float(random.uniform(20, 80)),
-                'trend': random.choice(['increasing', 'decreasing', 'stable'])
+                'mean': float(real_traffic_stats.get('mean', 0.0)),
+                'std': float(real_traffic_stats.get('std', 0.0)),
+                'min': float(real_traffic_stats.get('min', 0.0)),
+                'max': float(real_traffic_stats.get('max', 0.0)),
+                'median': float(real_traffic_stats.get('median', 0.0)),
+                'trend': str(real_traffic_stats.get('trend', 'stable')),
+                'trend_slope': float(real_traffic_stats.get('trend_slope', 0.0)),
+                'recent_mean': float(real_traffic_stats.get('recent_mean', 0.0)),
+                'coefficient_of_variation': float(real_traffic_stats.get('coefficient_of_variation', 0.0)),
+                'q25': float(real_traffic_stats.get('q25', 0.0)),
+                'q75': float(real_traffic_stats.get('q75', 0.0)),
+                'iqr': float(real_traffic_stats.get('iqr', 0.0)),
+                'data_points': int(real_traffic_stats.get('data_points', 0))
             }
 
             # 创建统计信息
@@ -144,10 +166,10 @@ class FederatedServer:
                 coordinates=coordinates,
                 loss=loss,
                 model_params=None,
-                traffic_data=None
+                traffic_data=None  # 不需要传递原始数据，直接使用计算好的统计信息
             )
 
-            # 手动设置流量统计
+            # 设置真实的流量统计
             stats.traffic_stats = traffic_stats
 
             client_stats.append(stats)
