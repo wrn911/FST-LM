@@ -43,16 +43,6 @@ class FederatedServer:
                 aggregator_kwargs['decay_type'] = getattr(args, 'decay_type', 'sigmoid')
                 aggregator_kwargs['base_constraint'] = getattr(args, 'base_constraint', 0.25)
 
-            # 多维度聚合的额外参数
-            elif args.aggregation == 'multi_dim_llm':
-                aggregator_kwargs['dimensions'] = getattr(args, 'multi_dim_dimensions',
-                                                          ['performance', 'geographic', 'traffic', 'trend'])
-                aggregator_kwargs['server_instance'] = self  # 传递服务器实例引用
-
-            # 层级感知聚合的额外参数
-            elif args.aggregation == 'layer_aware_llm':
-                aggregator_kwargs['layer_analysis_enabled'] = getattr(args, 'layer_analysis_enabled', True)
-
             self.aggregator = get_aggregator(args.aggregation, **aggregator_kwargs)
         else:
             self.aggregator = get_aggregator(args.aggregation)
@@ -128,8 +118,6 @@ class FederatedServer:
 
     def _prepare_client_statistics(self, selected_clients: List, client_info: List[Dict], round_idx: int):
         """准备LLM聚合需要的客户端统计信息 - 使用真实数据"""
-        from .simple_llm_aggregator import create_client_statistics
-
         client_stats = []
 
         for i, client in enumerate(selected_clients):
@@ -684,12 +672,6 @@ class FederatedServer:
         if 'val_losses' in self.train_history and self.train_history['val_losses']:
             round_results['val_loss'] = self.train_history['val_losses'][-1]
 
-        # 如果是多维度LLM模式，添加趋势分析信息
-        if self.args.aggregation == 'multi_dim_llm':
-            round_results['mode'] = 'LoRA + 多维度LLM智能聚合'
-            round_results['communication_efficiency'] = '99%+'
-            round_results['trend_analysis'] = self._get_round_trend_summary(selected_clients)
-
         return round_results
 
     def _get_round_trend_summary(self, selected_clients: List) -> Dict:
@@ -710,3 +692,43 @@ class FederatedServer:
     def get_train_history(self):
         """获取训练历史"""
         return copy.deepcopy(self.train_history)
+
+# 客户端统计信息类（简化版）
+class ClientStatistics:
+    """客户端统计信息"""
+
+    def __init__(self, client_id: str, coordinates: Dict, loss: float, traffic_stats: Dict = None):
+        self.client_id = client_id
+        self.coordinates = coordinates
+        self.loss = loss
+        self.traffic_stats = traffic_stats or {}
+
+def create_client_statistics(client_id: str, coordinates: Dict, loss: float,
+                             model_params: Dict = None, traffic_data=None) -> ClientStatistics:
+    """创建客户端统计信息 - 确保数据类型正确"""
+
+    # 确保所有数值都是Python原生类型
+    client_id = str(client_id)
+    loss = float(loss)
+
+    # 确保坐标是Python float
+    coordinates = {
+        'lng': float(coordinates.get('lng', 0)),
+        'lat': float(coordinates.get('lat', 0))
+    }
+
+    traffic_stats = {}
+    if traffic_data is not None:
+        import numpy as np
+        traffic_stats = {
+            'mean': float(np.mean(traffic_data)),
+            'std': float(np.std(traffic_data)),
+            'trend': 'increasing' if len(traffic_data) > 1 and traffic_data[-1] > traffic_data[0] else 'stable'
+        }
+
+    return ClientStatistics(
+        client_id=client_id,
+        coordinates=coordinates,
+        loss=loss,
+        traffic_stats=traffic_stats
+    )

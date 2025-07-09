@@ -194,15 +194,6 @@ def get_aggregator(aggregation_method: str, **kwargs):
         return WeightedFedAvgAggregator()
     elif aggregation_method.lower() == 'lora_fedavg':
         return LoRAFedAvgAggregator()
-    elif aggregation_method.lower() == 'llm_fedavg':
-        from .simple_llm_aggregator import SimpleLLMAggregator
-        return SimpleLLMAggregator(**kwargs)
-    elif aggregation_method.lower() == 'layer_aware_llm':
-        from .layer_aware_llm_aggregator import LayerAwareLLMAggregator
-        return LayerAwareLLMAggregator(**kwargs)
-    elif aggregation_method.lower() == 'multi_dim_llm':
-        from .multi_dimensional_llm_aggregator import MultiDimensionalLLMAggregator
-        return MultiDimensionalLLMAggregator(**kwargs)
     elif aggregation_method.lower() == 'enhanced_multi_dim_llm':
         from .enhanced_multi_dimensional_llm_aggregator import EnhancedMultiDimensionalLLMAggregator
 
