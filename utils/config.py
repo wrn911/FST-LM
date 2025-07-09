@@ -143,6 +143,27 @@ def get_args():
     parser.add_argument('--save_model', action='store_true',
                         help='是否保存模型')
 
+    # === 动态权重融合参数 ===
+    parser.add_argument('--alpha_max', type=float, default=0.9,
+                        help='前期LLM权重上限')
+    parser.add_argument('--alpha_min', type=float, default=0.2,
+                        help='后期LLM权重下限')
+    parser.add_argument('--decay_type', type=str, default='sigmoid',
+                        choices=['sigmoid', 'exponential', 'linear'],
+                        help='衰减类型')
+    parser.add_argument('--base_constraint', type=float, default=0.25,
+                        help='基础约束强度')
+
+    # === 历史贡献度参数 ===
+    parser.add_argument('--stability_weight', type=float, default=0.4,
+                        help='参与稳定性权重')
+    parser.add_argument('--quality_weight', type=float, default=0.35,
+                        help='梯度质量权重')
+    parser.add_argument('--consistency_weight', type=float, default=0.25,
+                        help='协作一致性权重')
+    parser.add_argument('--min_safe_weight', type=float, default=0.05,
+                        help='最小安全权重')
+
     args = parser.parse_args()
 
     # 设备自动检测

@@ -34,8 +34,14 @@ class FederatedServer:
                 aggregator_kwargs['dimensions'] = getattr(args, 'enhanced_multi_dim_dimensions',
                                                           ['model_performance', 'data_quality', 'spatial_distribution',
                                                            'temporal_stability', 'traffic_pattern'])
-                aggregator_kwargs['server_instance'] = self  # 传递服务器实例引用
-                aggregator_kwargs['verbose'] = getattr(args, 'expert_verbose', True)  # 新增：控制详细输出
+                aggregator_kwargs['server_instance'] = self
+                aggregator_kwargs['verbose'] = getattr(args, 'expert_verbose', True)
+
+                # 新增动态融合参数
+                aggregator_kwargs['alpha_max'] = getattr(args, 'alpha_max', 0.9)
+                aggregator_kwargs['alpha_min'] = getattr(args, 'alpha_min', 0.2)
+                aggregator_kwargs['decay_type'] = getattr(args, 'decay_type', 'sigmoid')
+                aggregator_kwargs['base_constraint'] = getattr(args, 'base_constraint', 0.25)
 
             # 多维度聚合的额外参数
             elif args.aggregation == 'multi_dim_llm':

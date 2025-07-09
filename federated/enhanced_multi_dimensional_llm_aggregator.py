@@ -62,7 +62,11 @@ class EnhancedMultiDimensionalLLMAggregator:
                  is_lora_mode: bool = False,
                  dimensions: List[str] = None,
                  server_instance=None,
-                 verbose: bool = True):  # 添加详细程度控制
+                 verbose: bool = True,
+                 alpha_max: float = 0.9,
+                 alpha_min: float = 0.2,
+                 decay_type: str = 'sigmoid',
+                 base_constraint: float = 0.25):
         """
         Args:
             verbose: 是否显示详细的专家决策过程
@@ -98,6 +102,18 @@ class EnhancedMultiDimensionalLLMAggregator:
         self.llm_client = None
         self._init_llm_client()
 
+        # 新增：动态融合参数
+        self.alpha_max = alpha_max
+        self.alpha_min = alpha_min
+        self.decay_type = decay_type
+        self.base_constraint = base_constraint
+
+        # 新增：历史数据跟踪
+        self.client_contribution_history = {}  # {client_id: 贡献度历史}
+        self.previous_weights = None  # 上一轮权重
+        self.round_history = []  # 轮次历史
+        self.constraint_triggers = []  # 约束触发记录
+
     def _initialize_dimension_weights(self):
         """初始化专家维度权重（5个专家）"""
         return {
@@ -125,51 +141,48 @@ class EnhancedMultiDimensionalLLMAggregator:
 
     def aggregate(self, client_models: List[Dict], client_info: List[Dict] = None,
                   client_stats: List = None, round_idx: int = 0):
-        """增强版多维度评分聚合"""
+        """增强版多维度评分聚合 - 添加动态融合和约束机制"""
+
         if not self.llm_client or not client_stats:
             print(f"\n⚠️  轮次 {round_idx}: 无LLM客户端或统计数据，使用备用聚合器")
             return self.fallback_aggregator.aggregate(client_models)
 
         try:
-            print(f"\n🚀 启动增强版多维度LLM聚合 - 轮次 {round_idx}")
+            print(f"\n🚀 启动增强版动态权重聚合 - 轮次 {round_idx}")
 
-            # 动态调整维度权重
-            old_weights = self.dimension_weights.copy()
-            self._adjust_dimension_weights(round_idx)
-
-            # 检查权重是否有变化
-            weight_changed = any(abs(old_weights[k] - self.dimension_weights[k]) > 0.001
-                                 for k in self.dimension_weights.keys())
-            if weight_changed:
-                print(f"📊 权重策略已调整 (轮次 {round_idx}):")
-                for dim in self.dimension_weights.keys():
-                    old_w = old_weights[dim]
-                    new_w = self.dimension_weights[dim]
-                    change = "↗" if new_w > old_w else "↘" if new_w < old_w else "→"
-                    print(f"   • {dim.replace('_', ' ').title()}: {old_w:.1%} {change} {new_w:.1%}")
-
-            # 获取各专家维度评分
+            # === 第一步：LLM智能评分 ===
             dimension_scores = self._get_enhanced_dimension_scores(client_stats, round_idx)
+            llm_weights = np.array(self._calculate_weighted_scores(dimension_scores))
+            llm_weights = self._scores_to_weights(llm_weights)
 
-            # 计算加权总分
-            final_scores = self._calculate_weighted_scores(dimension_scores)
+            # === 第二步：计算历史贡献度安全权重 ===
+            safe_weights = self.calculate_contribution_based_safe_weights(client_stats, round_idx)
 
-            # 转换为聚合权重
-            aggregation_weights = self._scores_to_weights(final_scores)
+            # === 第三步：动态权重融合 ===
+            alpha = self.get_decay_factor(round_idx)
+            fused_weights = alpha * np.array(llm_weights) + (1 - alpha) * safe_weights
 
-            print(f"\n🎯 最终聚合决策:")
-            print(f"   使用增强版多维度LLM智能权重进行聚合")
-            print(f"   权重分布: {[f'{w:.3%}' for w in aggregation_weights]}")
+            # === 第四步：权重约束保护 ===
+            final_weights, constraint_info = self.constrain_weights(
+                fused_weights, self.previous_weights, round_idx
+            )
 
-            # 执行聚合
-            result = self._weighted_aggregate(client_models, aggregation_weights)
+            # === 第五步：执行聚合 ===
+            result = self._weighted_aggregate(client_models, final_weights)
 
-            print(f"✅ 聚合完成！")
+            # === 第六步：更新历史记录 ===
+            self._update_client_history(client_stats, final_weights, round_idx)
+            self.previous_weights = final_weights
+            self.constraint_triggers.append(constraint_info)
+
+            # === 第七步：输出决策信息 ===
+            self._log_enhanced_aggregation_info(round_idx, alpha, llm_weights,
+                                                safe_weights, final_weights, constraint_info)
+
             return result
 
         except Exception as e:
-            print(f"❌ 增强版多维度聚合失败: {e}")
-            print(f"🔄 回退到备用聚合器")
+            print(f"❌ 增强版聚合失败: {e}")
             return self.fallback_aggregator.aggregate(client_models)
 
     def _get_enhanced_dimension_scores(self, client_stats, round_idx):
@@ -902,3 +915,282 @@ class EnhancedMultiDimensionalLLMAggregator:
 
         print(f"   🎯 专家最认同: 基站 {most_consistent[0]} (方差: {most_consistent[1]:.1f})")
         print(f"   🤔 专家最分歧: 基站 {most_controversial[0]} (方差: {most_controversial[1]:.1f})")
+
+    def get_decay_factor(self, round_idx, total_rounds=100):
+        """计算动态衰减因子α(t)"""
+        t = round_idx / total_rounds
+
+        if self.decay_type == 'sigmoid':
+            # S型衰减
+            k = 6.0
+            t_mid = 0.5
+            alpha = self.alpha_min + (self.alpha_max - self.alpha_min) / \
+                    (1 + np.exp(k * (t - t_mid)))
+        elif self.decay_type == 'exponential':
+            # 指数衰减
+            beta = 2.0
+            alpha = self.alpha_min + (self.alpha_max - self.alpha_min) * \
+                    np.exp(-beta * t)
+        else:  # linear
+            # 线性衰减
+            alpha = self.alpha_max - (self.alpha_max - self.alpha_min) * t
+
+        return np.clip(alpha, self.alpha_min, self.alpha_max)
+
+    def calculate_contribution_based_safe_weights(self, client_stats, round_idx):
+        """计算基于历史贡献度的安全权重"""
+
+        if round_idx < 3:
+            # 前3轮使用样本量权重
+            return self._get_sample_weighted_safe_weights(client_stats)
+
+        contribution_scores = []
+
+        for stats in client_stats:
+            client_id = str(stats.client_id)
+
+            # 计算三个维度评分
+            stability = self._calculate_participation_stability(client_id, round_idx)
+            quality = self._calculate_gradient_quality(client_id)
+            consistency = self._calculate_cooperation_consistency(client_id)
+
+            # 加权组合
+            contribution_score = (
+                    0.4 * stability +
+                    0.35 * quality +
+                    0.25 * consistency
+            )
+
+            contribution_scores.append(contribution_score)
+
+        # 归一化为权重
+        contribution_scores = np.array(contribution_scores)
+        min_weight = 0.05  # 最小权重保障
+        adjusted_scores = contribution_scores + min_weight
+        safe_weights = adjusted_scores / np.sum(adjusted_scores)
+
+        return safe_weights
+
+    def _get_sample_weighted_safe_weights(self, client_stats):
+        """基于样本量的安全权重（回退策略）"""
+        if hasattr(client_stats[0], 'num_samples'):
+            sample_counts = np.array([stats.num_samples for stats in client_stats])
+        else:
+            # 如果没有样本数信息，使用均匀权重
+            return np.ones(len(client_stats)) / len(client_stats)
+
+        weights = sample_counts / np.sum(sample_counts)
+        return weights
+
+    def _calculate_participation_stability(self, client_id, round_idx):
+        """计算参与稳定性"""
+        if client_id not in self.client_contribution_history:
+            return 0.3  # 新客户端给予较低评分
+
+        history = self.client_contribution_history[client_id]
+
+        # 参与轮数
+        participation_count = history.get('participation_count', 0)
+        participation_score = min(1.0, participation_count / 20)
+
+        # 参与密度
+        recent_window = min(10, round_idx)
+        recent_participation = len([r for r in history.get('participated_rounds', [])
+                                    if r >= round_idx - recent_window])
+        participation_density = recent_participation / recent_window if recent_window > 0 else 0
+
+        # 连续性评分
+        continuity_score = self._calculate_continuity_score(history.get('participated_rounds', []))
+
+        stability = (
+                0.4 * participation_score +
+                0.4 * participation_density +
+                0.2 * continuity_score
+        )
+
+        return stability
+
+    def _calculate_continuity_score(self, participated_rounds):
+        """计算参与连续性"""
+        if len(participated_rounds) < 2:
+            return 0.0
+
+        intervals = np.diff(sorted(participated_rounds))
+        if len(intervals) == 0:
+            return 1.0
+
+        avg_interval = np.mean(intervals)
+        interval_variance = np.var(intervals)
+
+        if avg_interval == 0:
+            return 1.0
+
+        continuity = 1.0 / (1.0 + interval_variance / avg_interval)
+        return continuity
+
+    def _calculate_gradient_quality(self, client_id):
+        """计算梯度贡献质量"""
+        if client_id not in self.client_contribution_history:
+            return 0.5
+
+        history = self.client_contribution_history[client_id]
+
+        # 损失改善稳定性
+        loss_improvements = history.get('loss_improvements', [])
+        if len(loss_improvements) < 2:
+            return 0.5
+
+        recent_improvements = loss_improvements[-5:]
+        avg_improvement = np.mean([max(0, imp) for imp in recent_improvements])
+        improvement_stability = 1.0 / (1.0 + np.std(recent_improvements))
+
+        # 综合质量评分
+        quality_score = min(1.0, avg_improvement * 10) * improvement_stability
+
+        return quality_score
+
+    def _calculate_cooperation_consistency(self, client_id):
+        """计算协作一致性"""
+        if client_id not in self.client_contribution_history:
+            return 0.5
+
+        history = self.client_contribution_history[client_id]
+        client_losses = history.get('losses', [])
+
+        if len(client_losses) < 3:
+            return 0.5
+
+        # 与全局趋势一致性
+        global_losses = getattr(self.server_instance, 'train_history', {}).get('global_loss', [])
+
+        if len(global_losses) < 3:
+            return 0.5
+
+        # 计算趋势相关性
+        min_len = min(len(client_losses), len(global_losses), 5)
+        client_trend = np.diff(client_losses[-min_len:])
+        global_trend = np.diff(global_losses[-min_len:])
+
+        if len(client_trend) == 0 or len(global_trend) == 0:
+            return 0.5
+
+        correlation = np.corrcoef(client_trend, global_trend)[0, 1]
+        correlation = 0 if np.isnan(correlation) else correlation
+
+        consistency = (correlation + 1) / 2  # 映射到[0,1]
+        return consistency
+
+    def constrain_weights(self, fused_weights, reference_weights, round_idx):
+        """权重约束保护机制"""
+        if reference_weights is None:
+            return fused_weights, {'triggered': False, 'deviation': 0}
+
+        # 计算约束阈值
+        constraint_threshold = self._get_dynamic_constraint_threshold(round_idx)
+
+        # 计算偏离程度
+        weight_deviation = np.linalg.norm(fused_weights - reference_weights)
+
+        constraint_info = {
+            'deviation': weight_deviation,
+            'threshold': constraint_threshold,
+            'triggered': weight_deviation > constraint_threshold
+        }
+
+        if constraint_info['triggered']:
+            # 应用约束
+            direction = (fused_weights - reference_weights) / weight_deviation
+            constrained_weights = reference_weights + constraint_threshold * direction
+
+            # 重新标准化
+            constrained_weights = constrained_weights / np.sum(constrained_weights)
+            constrained_weights = np.maximum(constrained_weights, 0.0)
+            constrained_weights = constrained_weights / np.sum(constrained_weights)
+
+            constraint_info['adjustment'] = np.linalg.norm(constrained_weights - fused_weights)
+            return constrained_weights, constraint_info
+
+        return fused_weights, constraint_info
+
+    def _get_dynamic_constraint_threshold(self, round_idx):
+        """动态约束阈值"""
+        # 基础约束强度
+        base_strength = self.base_constraint
+
+        # 时间因子：后期约束更严格
+        time_factor = 0.5 + 0.5 * (round_idx / 100)
+
+        # 波动因子：基于最近性能波动
+        volatility_factor = 1.0
+        if len(self.round_history) >= 3:
+            recent_losses = [h.get('avg_loss', 1.0) for h in self.round_history[-3:]]
+            volatility = np.std(recent_losses) / (np.mean(recent_losses) + 1e-8)
+            volatility_factor = 1.0 + min(1.0, volatility)
+
+        threshold = base_strength * time_factor * volatility_factor
+        return np.clip(threshold, 0.1, 0.5)
+
+    def _update_client_history(self, client_stats, final_weights, round_idx):
+        """更新客户端历史记录"""
+        for i, stats in enumerate(client_stats):
+            client_id = str(stats.client_id)
+
+            if client_id not in self.client_contribution_history:
+                self.client_contribution_history[client_id] = {
+                    'participation_count': 0,
+                    'participated_rounds': [],
+                    'losses': [],
+                    'loss_improvements': [],
+                    'weights_received': []
+                }
+
+            history = self.client_contribution_history[client_id]
+
+            # 更新参与记录
+            history['participation_count'] += 1
+            history['participated_rounds'].append(round_idx)
+
+            # 更新损失记录
+            current_loss = float(stats.loss)
+            history['losses'].append(current_loss)
+
+            # 计算损失改善
+            if len(history['losses']) >= 2:
+                improvement = history['losses'][-2] - history['losses'][-1]
+                history['loss_improvements'].append(improvement)
+
+            # 记录获得的权重
+            history['weights_received'].append(float(final_weights[i]))
+
+            # 保持历史记录长度
+            max_history = 20
+            for key in ['losses', 'loss_improvements', 'weights_received']:
+                if len(history[key]) > max_history:
+                    history[key] = history[key][-max_history:]
+
+            if len(history['participated_rounds']) > max_history:
+                history['participated_rounds'] = history['participated_rounds'][-max_history:]
+
+    def _log_enhanced_aggregation_info(self, round_idx, alpha, llm_weights,
+                                       safe_weights, final_weights, constraint_info):
+        """输出增强版聚合信息"""
+        print(f"\n🔄 轮次 {round_idx} - 增强版动态权重聚合")
+        print(f"   📊 衰减因子 α = {alpha:.3f}")
+        print(f"   🤖 LLM权重: {[f'{w:.3f}' for w in llm_weights]}")
+        print(f"   🛡️  安全权重: {[f'{w:.3f}' for w in safe_weights]}")
+        print(f"   ⚖️  最终权重: {[f'{w:.3f}' for w in final_weights]}")
+
+        if constraint_info['triggered']:
+            print(f"   ⚠️  约束触发: 偏离 {constraint_info['deviation']:.3f} > 阈值 {constraint_info['threshold']:.3f}")
+            print(f"   🔧 权重调整: {constraint_info.get('adjustment', 0):.3f}")
+        else:
+            print(f"   ✅ 约束满足: 偏离 {constraint_info['deviation']:.3f} ≤ 阈值 {constraint_info['threshold']:.3f}")
+
+        # 权重分布分析
+        max_weight = max(final_weights)
+        min_weight = min(final_weights)
+        weight_entropy = -sum(w * np.log(w + 1e-10) for w in final_weights)
+        max_entropy = np.log(len(final_weights))
+        diversity_ratio = weight_entropy / max_entropy
+
+        print(f"   📈 权重统计: 最大={max_weight:.3f}, 最小={min_weight:.3f}, 多样性={diversity_ratio:.1%}")

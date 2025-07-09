@@ -203,8 +203,18 @@ def get_aggregator(aggregation_method: str, **kwargs):
     elif aggregation_method.lower() == 'multi_dim_llm':
         from .multi_dimensional_llm_aggregator import MultiDimensionalLLMAggregator
         return MultiDimensionalLLMAggregator(**kwargs)
-    elif aggregation_method.lower() == 'enhanced_multi_dim_llm':  # 新增
+    elif aggregation_method.lower() == 'enhanced_multi_dim_llm':
         from .enhanced_multi_dimensional_llm_aggregator import EnhancedMultiDimensionalLLMAggregator
-        return EnhancedMultiDimensionalLLMAggregator(**kwargs)
+
+        # 添加新的参数传递
+        aggregator_kwargs = kwargs.copy()
+        aggregator_kwargs.update({
+            'alpha_max': kwargs.get('alpha_max', 0.9),
+            'alpha_min': kwargs.get('alpha_min', 0.2),
+            'decay_type': kwargs.get('decay_type', 'sigmoid'),
+            'base_constraint': kwargs.get('base_constraint', 0.25),
+        })
+
+        return EnhancedMultiDimensionalLLMAggregator(**aggregator_kwargs)
     else:
         raise ValueError(f"不支持的聚合方法: {aggregation_method}")
