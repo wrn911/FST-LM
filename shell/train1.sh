@@ -3,6 +3,8 @@
 # 增强版多维度LLM聚合训练脚本（新增动态融合和约束机制）
 echo "=== 启动增强版动态权重联邦学习训练 ==="
 
+cd ../
+
 python federated_train.py \
     --use_lora \
     --lora_rank 16 \
@@ -14,7 +16,7 @@ python federated_train.py \
     --decay_type sigmoid \
     --base_constraint 0.25 \
     --stability_weight 0.4 \
-      --quality_weight 0.35 \
+    --quality_weight 0.35 \
     --consistency_weight 0.25 \
     --min_safe_weight 0.05 \
     --llm_api_key "118aea86606f4e2f82750c54d3bb380c.DxtxnaKQhFz5EHPY" \
@@ -36,6 +38,6 @@ python federated_train.py \
     --max_deviation_ratio 0.25 \
     --min_correlation_threshold 0.5 \
     --constraint_correction_weight 0.3 \
-    --device cuda:0
+    --device cuda:1
 
 echo "=== 训练完成 ==="

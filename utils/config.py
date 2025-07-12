@@ -77,6 +77,34 @@ def get_args():
     parser.add_argument('--patience', type=int, default=10,
                         help='早停耐心值')
 
+    # === 数据增强参数 ===
+    parser.add_argument('--enable_augmentation', action='store_true',
+                        help='是否启用数据增强策略')
+    parser.add_argument('--mixup_prob', type=float, default=0.2,
+                        help='Mixup增强概率')
+    parser.add_argument('--jittering_prob', type=float, default=0.15,
+                        help='Jittering增强概率')
+    parser.add_argument('--scaling_prob', type=float, default=0.1,
+                        help='Scaling增强概率')
+    parser.add_argument('--augmentation_ratio', type=float, default=0.3,
+                        help='增强样本占总样本的比例')
+    parser.add_argument('--similarity_threshold', type=float, default=0.6,
+                        help='相似性阈值（皮尔逊相关系数）')
+    parser.add_argument('--candidate_pool_size', type=int, default=5,
+                        help='候选池大小')
+    parser.add_argument('--augmentation_lambda_min', type=float, default=0.6,
+                        help='Mixup lambda值下限')
+    parser.add_argument('--augmentation_lambda_max', type=float, default=0.8,
+                        help='Mixup lambda值上限')
+    parser.add_argument('--enable_regularization_constraints', action='store_true', default=True,
+                        help='是否启用正则化约束机制')
+    parser.add_argument('--max_deviation_ratio', type=float, default=0.3,
+                        help='统计特征最大偏离比例')
+    parser.add_argument('--min_correlation_threshold', type=float, default=0.5,
+                        help='最小时序相关性阈值')
+    parser.add_argument('--constraint_correction_weight', type=float, default=0.3,
+                        help='约束修正时的原始数据权重')
+
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='enhanced_multi_dim_llm',
                         choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg',

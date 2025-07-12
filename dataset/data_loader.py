@@ -2,6 +2,7 @@
 """
 联邦学习数据加载和预处理模块 - 添加原始流量统计
 """
+import copy
 
 import h5py
 import pandas as pd
@@ -14,15 +15,236 @@ from typing import Tuple, Dict, List
 import logging
 
 
+class DataAugmentationManager:
+    """数据增强管理器"""
+
+    def __init__(self, similarity_threshold=0.6, candidate_pool_size=5,
+                 lambda_min=0.6, lambda_max=0.8):
+        self.similarity_threshold = similarity_threshold
+        self.candidate_pool_size = candidate_pool_size
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+
+        # 约束配置
+        self.constraint_config = {
+            'enable_statistical_constraint': True,  # 统计约束
+            'enable_range_constraint': True,  # 范围约束
+            'enable_trend_constraint': True,  # 趋势约束
+            'max_deviation_ratio': 0.3,  # 最大偏离比例
+            'min_correlation_threshold': 0.5  # 最小相关性阈值
+        }
+
+    def apply_regularization_constraints(self, enhanced_seq, enhanced_target,
+                                         original_seq, original_target):
+        """应用正则化约束机制"""
+        constrained_seq = enhanced_seq.copy()
+        constrained_target = enhanced_target.copy()
+
+        # 约束1: 统计特征约束
+        if self.constraint_config['enable_statistical_constraint']:
+            constrained_seq = self._apply_statistical_constraint(
+                constrained_seq, original_seq
+            )
+            constrained_target = self._apply_statistical_constraint(
+                constrained_target, original_target
+            )
+
+        # 约束2: 数值范围约束
+        if self.constraint_config['enable_range_constraint']:
+            constrained_seq = self._apply_range_constraint(
+                constrained_seq, original_seq
+            )
+            constrained_target = self._apply_range_constraint(
+                constrained_target, original_target
+            )
+
+        # 约束3: 时序相关性约束
+        if self.constraint_config['enable_trend_constraint']:
+            constrained_seq = self._apply_correlation_constraint(
+                constrained_seq, original_seq
+            )
+
+        return constrained_seq, constrained_target
+
+    def _apply_statistical_constraint(self, enhanced_data, original_data):
+        """统计特征约束：确保均值和标准差在合理范围内"""
+        orig_mean = np.mean(original_data)
+        orig_std = np.std(original_data)
+
+        enhanced_mean = np.mean(enhanced_data)
+        enhanced_std = np.std(enhanced_data)
+
+        max_deviation = self.constraint_config['max_deviation_ratio']
+
+        # 约束均值偏离
+        if abs(enhanced_mean - orig_mean) > max_deviation * orig_mean:
+            # 软约束：线性调整到合理范围
+            target_mean = orig_mean * (1 + max_deviation * np.sign(enhanced_mean - orig_mean))
+            enhanced_data = enhanced_data - enhanced_mean + target_mean
+
+        # 约束标准差偏离
+        current_std = np.std(enhanced_data)
+        if abs(current_std - orig_std) > max_deviation * orig_std:
+            target_std = orig_std * (1 + max_deviation)
+            if current_std > 0:
+                enhanced_data = (enhanced_data - np.mean(enhanced_data)) * (target_std / current_std) + np.mean(
+                    enhanced_data)
+
+        return enhanced_data
+
+    def _apply_range_constraint(self, enhanced_data, original_data):
+        """数值范围约束：确保数据在合理的物理范围内"""
+        orig_min = np.min(original_data)
+        orig_max = np.max(original_data)
+
+        # 计算合理的扩展范围
+        data_range = orig_max - orig_min
+        extended_min = max(0, orig_min - 0.2 * data_range)  # 确保非负
+        extended_max = orig_max + 0.2 * data_range
+
+        # 应用软裁剪（使用tanh函数平滑约束）
+        enhanced_data = np.clip(enhanced_data, extended_min, extended_max)
+
+        return enhanced_data
+
+    def _apply_correlation_constraint(self, enhanced_seq, original_seq):
+        """时序相关性约束：确保时序特征不被破坏"""
+        # 计算与原始序列的相关性
+        correlation = np.corrcoef(enhanced_seq.flatten(), original_seq.flatten())[0, 1]
+
+        if np.isnan(correlation) or correlation < self.constraint_config['min_correlation_threshold']:
+            # 如果相关性太低，使用加权平均进行修正
+            correction_weight = 0.3  # 30%原始数据用于修正
+            enhanced_seq = (1 - correction_weight) * enhanced_seq + correction_weight * original_seq
+
+        return enhanced_seq
+
+    def apply_periodic_mixup(self, seq, target, historical_data, current_idx):
+        """时间周期性Mixup（集成约束机制）"""
+        candidate = self.find_similar_candidates(seq, historical_data, current_idx)
+
+        if candidate is not None:
+            lambda_val = random.uniform(self.lambda_min, self.lambda_max)
+            enhanced_seq = lambda_val * seq + (1 - lambda_val) * candidate
+            enhanced_target = target.copy()  # target保持不变
+
+            # 应用正则化约束
+            enhanced_seq, enhanced_target = self.apply_regularization_constraints(
+                enhanced_seq, enhanced_target, seq, target
+            )
+
+            return enhanced_seq, enhanced_target
+
+        return seq, target
+
+    def apply_jittering(self, seq, noise_level=0.03):
+        """添加高斯噪声（集成约束机制）"""
+        noise = np.random.normal(0, noise_level * np.std(seq), seq.shape)
+        enhanced_seq = seq + noise
+
+        # 应用范围约束
+        enhanced_seq = self._apply_range_constraint(enhanced_seq, seq)
+
+        return enhanced_seq
+
+    def apply_scaling(self, seq, target, scale_range=(0.85, 1.15)):
+        """随机缩放（集成约束机制）"""
+        scale_factor = random.uniform(*scale_range)
+        enhanced_seq = seq * scale_factor
+        enhanced_target = target * scale_factor
+
+        # 应用统计约束
+        enhanced_seq = self._apply_statistical_constraint(enhanced_seq, seq)
+        enhanced_target = self._apply_statistical_constraint(enhanced_target, target)
+
+        return enhanced_seq, enhanced_target
+
+    def find_similar_candidates(self, target_sequence, historical_data, current_idx):
+        """找到相似的候选序列"""
+        if len(historical_data) < 5:  # 历史数据不足
+            return None
+
+        similarities = []
+        target_flat = target_sequence.flatten()
+
+        # 在历史数据中寻找相似序列
+        history_window = max(0, current_idx - 50)  # 最近50个样本作为候选池
+        search_end = min(current_idx, len(historical_data))
+
+        for i in range(history_window, search_end):
+            if i == current_idx:  # 跳过自己
+                continue
+
+            hist_seq = historical_data[i]
+            hist_flat = hist_seq.flatten()
+
+            # 计算皮尔逊相关系数
+            if len(hist_flat) == len(target_flat):
+                corr = np.corrcoef(target_flat, hist_flat)[0, 1]
+
+                if not np.isnan(corr) and corr > self.similarity_threshold:
+                    similarities.append((i, corr, hist_seq))
+
+        if not similarities:
+            return None
+
+        # 按相似性排序，取前N个作为候选池
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        candidates = similarities[:self.candidate_pool_size]
+
+        # 从候选池中随机选择一个
+        _, _, selected_candidate = random.choice(candidates)
+        return selected_candidate
+
+
 class FederatedDataLoader:
     """联邦学习数据加载器"""
-
     def __init__(self, args):
         self.args = args
         self.selected_cells = None
         self.cell_coordinates = None
         self.original_traffic_stats = None  # 新增：原始流量统计
         self.logger = logging.getLogger(__name__)
+
+        # 添加数据增强配置
+        self.augmentation_config = {
+            'enable_augmentation': getattr(args, 'enable_augmentation', False),
+            'mixup_prob': getattr(args, 'mixup_prob', 0.2),
+            'jittering_prob': getattr(args, 'jittering_prob', 0.15),
+            'scaling_prob': getattr(args, 'scaling_prob', 0.1),
+            'augmentation_ratio': getattr(args, 'augmentation_ratio', 0.3),
+            'similarity_threshold': getattr(args, 'similarity_threshold', 0.6),
+            'candidate_pool_size': getattr(args, 'candidate_pool_size', 5),
+            'lambda_min': getattr(args, 'augmentation_lambda_min', 0.6),
+            'lambda_max': getattr(args, 'augmentation_lambda_max', 0.8),
+            # 直接在这里添加约束配置，避免后续update
+            'enable_regularization_constraints': getattr(args, 'enable_regularization_constraints', True),
+            'max_deviation_ratio': getattr(args, 'max_deviation_ratio', 0.3),
+            'min_correlation_threshold': getattr(args, 'min_correlation_threshold', 0.5),
+            'constraint_correction_weight': getattr(args, 'constraint_correction_weight', 0.3)
+        }
+
+        # 初始化数据增强管理器（只创建一次）
+        if self.augmentation_config['enable_augmentation']:
+            self.aug_manager = DataAugmentationManager(
+                similarity_threshold=self.augmentation_config['similarity_threshold'],
+                candidate_pool_size=self.augmentation_config['candidate_pool_size'],
+                lambda_min=self.augmentation_config['lambda_min'],
+                lambda_max=self.augmentation_config['lambda_max']
+            )
+
+            # 更新约束配置
+            self.aug_manager.constraint_config.update({
+                'max_deviation_ratio': self.augmentation_config['max_deviation_ratio'],
+                'min_correlation_threshold': self.augmentation_config['min_correlation_threshold'],
+                'enable_statistical_constraint': self.augmentation_config['enable_regularization_constraints'],
+                'enable_range_constraint': self.augmentation_config['enable_regularization_constraints'],
+                'enable_trend_constraint': self.augmentation_config['enable_regularization_constraints']
+            })
+
+            self.logger.info("数据增强功能已启用（包含正则化约束）")
+        else:
+            self.aug_manager = None
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
         """
@@ -183,30 +405,40 @@ class FederatedDataLoader:
 
     def create_sequences_for_cell(self, cell_data: pd.Series) -> Dict:
         """
-        为单个基站创建时序序列（TimeLLM风格）
-
-        Args:
-            cell_data: 单个基站的时序数据
-
-        Returns:
-            sequences: 包含训练、验证、测试序列的字典
+        为单个基站创建时序序列（集成数据增强）
         """
-        history_sequences = []  # 历史序列
-        target_sequences = []  # 目标序列
+        # 先创建原始序列
+        original_sequences = self._create_basic_sequences(cell_data)
+
+        # 如果启用数据增强，应用增强策略
+        if (self.augmentation_config['enable_augmentation'] and
+                self.aug_manager is not None):
+            augmented_sequences = self._apply_augmentation_strategies(
+                original_sequences, cell_data
+            )
+            # 合并原始和增强序列
+            merged_sequences = self._merge_sequences(original_sequences, augmented_sequences)
+            self.logger.info(f"数据增强完成，训练样本从 {len(original_sequences['train']['history'])} "
+                             f"增加到 {len(merged_sequences['train']['history'])}")
+            return merged_sequences
+
+        return original_sequences
+
+    def _create_basic_sequences(self, cell_data: pd.Series) -> Dict:
+        """创建基础时序序列（原create_sequences_for_cell的逻辑）"""
+        history_sequences = []
+        target_sequences = []
 
         # 生成滑动窗口序列
         for idx in range(self.args.seq_len, len(cell_data) - self.args.pred_len + 1):
-            # 历史序列：前seq_len个时间点
             history = cell_data.iloc[idx - self.args.seq_len:idx].values
             history_sequences.append(history)
-
-            # 目标序列：接下来pred_len个时间点
             target = cell_data.iloc[idx:idx + self.args.pred_len].values
             target_sequences.append(target)
 
         # 转换为numpy数组
-        history_array = np.array(history_sequences)  # shape: (num_samples, seq_len)
-        target_array = np.array(target_sequences)  # shape: (num_samples, pred_len)
+        history_array = np.array(history_sequences)
+        target_array = np.array(target_sequences)
 
         # 数据分割
         test_len = self.args.test_days * 24
@@ -224,7 +456,6 @@ class FederatedDataLoader:
             }
         }
 
-        # 如果有验证集
         if val_len > 0:
             sequences['val'] = {
                 'history': history_array[train_len:train_len + val_len],
@@ -232,6 +463,78 @@ class FederatedDataLoader:
             }
 
         return sequences
+
+    def _apply_augmentation_strategies(self, sequences, raw_data):
+        """应用多种增强策略"""
+        augmented_data = {'train': {'history': [], 'target': []}}
+
+        original_history = sequences['train']['history']
+        original_target = sequences['train']['target']
+        raw_values = raw_data.values  # 原始时序数据
+
+        # 计算需要增强的样本数量
+        num_to_augment = int(len(original_history) * self.augmentation_config['augmentation_ratio'])
+        augment_indices = random.sample(range(len(original_history)), num_to_augment)
+
+        self.logger.info(f"对 {num_to_augment}/{len(original_history)} 个样本应用数据增强")
+
+        for i in augment_indices:
+            current_seq = original_history[i].copy()
+            current_target = original_target[i].copy()
+            enhanced_seq = current_seq.copy()
+            enhanced_target = current_target.copy()
+
+            augmentation_applied = []
+
+            # 策略1: 时间周期性Mixup
+            if random.random() < self.augmentation_config['mixup_prob']:
+                enhanced_seq, enhanced_target = self.aug_manager.apply_periodic_mixup(
+                    enhanced_seq, enhanced_target, original_history, i
+                )
+                augmentation_applied.append("Mixup")
+
+            # 策略2: Jittering（时序抖动）
+            if random.random() < self.augmentation_config['jittering_prob']:
+                enhanced_seq = self.aug_manager.apply_jittering(enhanced_seq)
+                augmentation_applied.append("Jittering")
+
+            # 策略3: Scaling（幅度缩放）
+            if random.random() < self.augmentation_config['scaling_prob']:
+                enhanced_seq, enhanced_target = self.aug_manager.apply_scaling(
+                    enhanced_seq, enhanced_target
+                )
+                augmentation_applied.append("Scaling")
+
+            # 只有当至少应用了一种增强策略时才添加
+            if augmentation_applied:
+                augmented_data['train']['history'].append(enhanced_seq)
+                augmented_data['train']['target'].append(enhanced_target)
+
+        # 转换为numpy数组
+        if augmented_data['train']['history']:
+            augmented_data['train']['history'] = np.array(augmented_data['train']['history'])
+            augmented_data['train']['target'] = np.array(augmented_data['train']['target'])
+
+        return augmented_data
+
+    def _merge_sequences(self, original_sequences, augmented_sequences):
+        """合并原始和增强序列"""
+        merged = copy.deepcopy(original_sequences)
+
+        # 合并训练数据
+        if (augmented_sequences['train']['history'] is not None and
+                len(augmented_sequences['train']['history']) > 0):
+            merged['train']['history'] = np.concatenate([
+                original_sequences['train']['history'],
+                augmented_sequences['train']['history']
+            ], axis=0)
+
+            merged['train']['target'] = np.concatenate([
+                original_sequences['train']['target'],
+                augmented_sequences['train']['target']
+            ], axis=0)
+
+        return merged
 
     def prepare_federated_data(self, normalized_df: pd.DataFrame) -> Dict:
         """
