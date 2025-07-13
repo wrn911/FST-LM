@@ -1,9 +1,22 @@
 #!/bin/bash
 
-# 增强版多维度LLM聚合训练脚本（新增动态融合和约束机制 + 模型保存）
-echo "=== 启动增强版动态权重联邦学习训练 ==="
+# 从检查点恢复训练脚本
+echo "=== 从检查点恢复联邦学习训练 ==="
+
+# 检查点文件路径（请根据实际情况修改）
+CHECKPOINT_PATH="results/checkpoint_round_3.pth"
+
+# 检查文件是否存在
+if [ ! -f "$CHECKPOINT_PATH" ]; then
+    echo "错误: 检查点文件不存在: $CHECKPOINT_PATH"
+    echo "请检查文件路径或运行正常训练"
+    exit 1
+fi
+
+echo "从检查点恢复: $CHECKPOINT_PATH"
 
 python federated_train.py \
+    --resume "$CHECKPOINT_PATH" \
     --use_lora \
     --lora_rank 16 \
     --lora_alpha 32 \
@@ -26,7 +39,7 @@ python federated_train.py \
     --lora_target_modules q_proj,k_proj,v_proj,o_proj \
     --eval_every 1 \
     --save_checkpoint \
-    --checkpoint_interval 1 \
+    --checkpoint_interval 5 \
     --save_best_model \
     --enable_augmentation \
     --mixup_prob 0.2 \
@@ -41,4 +54,4 @@ python federated_train.py \
     --constraint_correction_weight 0.3 \
     --device cuda:0
 
-echo "=== 训练完成 ==="
+echo "=== 恢复训练完成 ==="

@@ -593,6 +593,60 @@ class FederatedServer:
             else:
                 return 'stable'
 
+    def save_checkpoint(self, save_path, round_idx, best_val_loss=None, train_history=None):
+        """保存检查点"""
+        import os
+
+        checkpoint = {
+            'round': round_idx,
+            'global_model_state_dict': self.global_model.state_dict(),
+            'train_history': train_history or self.train_history,
+            'best_val_loss': best_val_loss,
+            'args': vars(self.args),
+            'client_history': getattr(self, 'client_history', {}),
+        }
+
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        torch.save(checkpoint, save_path)
+        print(f"检查点已保存: {save_path}")
+
+    def load_checkpoint(self, checkpoint_path):
+        """加载检查点"""
+        import os
+
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"检查点文件不存在: {checkpoint_path}")
+
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+        # 恢复全局模型
+        self.global_model.load_state_dict(checkpoint['global_model_state_dict'])
+
+        # 恢复训练历史
+        self.train_history = checkpoint.get('train_history', self.train_history)
+        self.client_history = checkpoint.get('client_history', getattr(self, 'client_history', {}))
+
+        start_round = checkpoint['round'] + 1
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+
+        print(f"已从轮次 {checkpoint['round']} 恢复检查点")
+        return start_round, best_val_loss
+
+    def save_best_model(self, save_path, val_loss, round_idx):
+        """保存最优验证模型"""
+        import os
+
+        best_model = {
+            'round': round_idx,
+            'val_loss': val_loss,
+            'global_model_state_dict': self.global_model.state_dict(),
+            'args': vars(self.args)
+        }
+
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        torch.save(best_model, save_path)
+        print(f"最优模型已保存: {save_path} (轮次 {round_idx}, 验证损失: {val_loss:.6f})")
+
     def federated_round(self, all_clients: List, round_idx: int):
         """
         执行一轮联邦学习 - 优化显存使用并记录历史数据

@@ -171,6 +171,16 @@ def get_args():
     parser.add_argument('--save_model', action='store_true',
                         help='是否保存模型')
 
+    # === 模型保存和恢复参数 ===
+    parser.add_argument('--save_checkpoint', action='store_true',
+                        help='是否保存训练检查点')
+    parser.add_argument('--checkpoint_interval', type=int, default=1,
+                        help='每隔多少轮保存一次检查点')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='从指定检查点恢复训练')
+    parser.add_argument('--save_best_model', action='store_true', default=True,
+                        help='是否保存最优验证模型')
+
     # === 动态权重融合参数 ===
     parser.add_argument('--alpha_max', type=float, default=0.9,
                         help='前期LLM权重上限')

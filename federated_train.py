@@ -200,10 +200,24 @@ def main():
     # 创建联邦服务器
     server = FederatedServer(global_model, args)
 
-    # 开始联邦训练
-    print(f"\n开始联邦训练 ({args.rounds} 轮)...")
+    # 检查是否需要恢复训练
+    start_round = 1
+    best_val_loss = float('inf')
 
-    for round_idx in range(1, args.rounds + 1):
+    if args.resume:
+        try:
+            start_round, best_val_loss = server.load_checkpoint(args.resume)
+            print(f"从轮次 {start_round} 恢复训练，当前最佳验证损失: {best_val_loss:.6f}")
+        except Exception as e:
+            print(f"恢复检查点失败: {e}")
+            print("将从头开始训练")
+            start_round = 1
+            best_val_loss = float('inf')
+
+    # 开始联邦训练
+    print(f"\n开始联邦训练 (从轮次 {start_round} 到 {args.rounds})...")
+
+    for round_idx in range(start_round, args.rounds + 1):
         print(f"\n{'=' * 50}")
         print(f"联邦学习轮次: {round_idx}/{args.rounds}")
 
@@ -224,7 +238,7 @@ def main():
         if 'val_loss' in round_results:
             print(f"本轮验证集损失: {round_results['val_loss']:.6f}")
 
-        # 每隔一定轮数进行全局评估（保持原有逻辑但输出更详细）
+        # 每隔一定轮数进行全局评估
         if round_idx % args.eval_every == 0:
             print("进行全局模型评估...")
 
@@ -236,10 +250,28 @@ def main():
                 server.train_history['global_loss'].append(val_loss)
                 print(f"全局验证损失: {val_loss:.6f}")
 
+                # 保存最优模型
+                if args.save_best_model and val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_model_path = f"{args.save_dir}/best_model.pth"
+                    server.save_best_model(best_model_path, val_loss, round_idx)
+                    print(f"🎯 发现更优模型！验证损失: {val_loss:.6f}")
+
             # 如果也想看测试集表现（可选，但不用于模型选择）
             if hasattr(eval_clients[0], 'test_loader') and round_idx % (args.eval_every * 2) == 0:
                 test_loss, _ = server.evaluate_global_model_detailed(eval_clients, 'test')
                 print(f"当前测试损失: {test_loss:.6f} (仅供参考)")
+
+        # 保存检查点
+        if args.save_checkpoint and round_idx % args.checkpoint_interval == 0:
+            checkpoint_path = f"{args.save_dir}/checkpoint_round_{round_idx}.pth"
+            server.save_checkpoint(checkpoint_path, round_idx, best_val_loss)
+
+    # 训练结束，保存最终检查点
+    if args.save_checkpoint:
+        final_checkpoint_path = f"{args.save_dir}/final_checkpoint.pth"
+        server.save_checkpoint(final_checkpoint_path, args.rounds, best_val_loss)
+        print(f"最终检查点已保存: {final_checkpoint_path}")
 
     print("\n联邦训练完成!")
 
@@ -260,7 +292,6 @@ def main():
 
     # 验证损失
     if 'val_losses' in train_history and train_history['val_losses']:
-        best_val_loss = min(train_history['val_losses'])
         final_val_loss = train_history['val_losses'][-1]
         print(f"最佳验证损失: {best_val_loss:.6f}")
         print(f"最终验证损失: {final_val_loss:.6f}")
@@ -269,6 +300,16 @@ def main():
     if train_history['global_loss']:
         best_global_loss = min(train_history['global_loss'])
         print(f"最佳全局损失: {best_global_loss:.6f}")
+
+    # 模型保存摘要
+    if args.save_best_model:
+        print(f"\n📁 模型保存信息:")
+        print(f"   最优模型: {args.save_dir}/best_model.pth")
+        print(f"   最优验证损失: {best_val_loss:.6f}")
+
+    if args.save_checkpoint:
+        print(f"   最终检查点: {args.save_dir}/final_checkpoint.pth")
+        print(f"   检查点保存间隔: 每 {args.checkpoint_interval} 轮")
 
     # 如果使用多维度LLM聚合，生成趋势分析
     if args.aggregation == 'multi_dim_llm':
