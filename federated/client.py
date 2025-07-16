@@ -31,6 +31,12 @@ class FederatedClient:
         # 客户端统计信息
         self.num_samples = len(data_loader.dataset)
 
+        # 新增: 存储全局模型参数用于FedProx (支持LoRA)
+        self.global_params = None
+        self.use_fedprox = getattr(args, 'use_fedprox', False)
+        self.fedprox_mu = getattr(args, 'fedprox_mu', 0.1)
+        self.is_lora_mode = hasattr(args, 'use_lora') and args.use_lora
+
     def get_model_params(self):
         """获取模型参数 - LoRA模式只返回可训练参数"""
         if hasattr(self.model, 'llm_model') and hasattr(self.model.llm_model, 'peft_config'):
@@ -84,6 +90,11 @@ class FederatedClient:
                 self.optimizer.zero_grad()
                 outputs = self.model(x_enc, x_mark_enc, x_dec, x_mark_dec)
                 loss = self.criterion(outputs, y_true)
+
+                # 新增: FedProx正则化项 (LoRA优化版本)
+                if self.use_fedprox and self.global_params is not None:
+                    fedprox_reg = self._compute_lora_fedprox_regularization()
+                    loss += fedprox_reg
 
                 # 反向传播
                 loss.backward()
@@ -160,3 +171,56 @@ class FederatedClient:
     def get_coordinates(self):
         """获取真实坐标信息（供LLM聚合使用）"""
         return self.coordinates
+
+    def set_global_params_for_fedprox(self, global_params):
+        """设置全局模型参数用于FedProx正则化 - LoRA优化版本"""
+        if self.use_fedprox:
+            if self.is_lora_mode:
+                # LoRA模式: 只存储可训练的LoRA参数
+                self.global_params = {}
+                for key, value in global_params.items():
+                    if self._is_lora_param(key):
+                        self.global_params[key] = value.clone().detach()
+                print(f"  FedProx存储了 {len(self.global_params)} 个LoRA参数用于正则化")
+            else:
+                # 标准模式: 存储所有参数
+                self.global_params = {k: v.clone().detach() for k, v in global_params.items()}
+
+    def _is_lora_param(self, param_name: str) -> bool:
+        """判断参数是否为LoRA参数"""
+        lora_keywords = ['lora_A', 'lora_B', 'lora_embedding_A', 'lora_embedding_B']
+        return any(keyword in param_name for keyword in lora_keywords)
+
+    def _compute_lora_fedprox_regularization(self):
+        """计算LoRA优化的FedProx正则化项 - 只对LoRA参数计算"""
+        fedprox_term = 0.0
+
+        current_params = self.get_model_params()  # 获取当前可训练参数
+
+        for key in current_params:
+            if key in self.global_params:
+                # 计算 ||w_lora - w_global_lora||^2
+                param_diff = current_params[key] - self.global_params[key]
+                fedprox_term += torch.sum(param_diff ** 2)
+
+        # 由于只计算LoRA参数，可能需要调整μ值
+        effective_mu = self.fedprox_mu
+        if self.is_lora_mode:
+            # LoRA参数相对较少，可以适当增加正则化强度
+            effective_mu = self.fedprox_mu * 2.0
+
+        return (effective_mu / 2.0) * fedprox_term
+
+    def _compute_fedprox_regularization(self):
+        """计算标准FedProx正则化项 (保留用于兼容)"""
+        fedprox_term = 0.0
+
+        current_params = self.get_model_params()
+
+        for key in current_params:
+            if key in self.global_params:
+                # 计算 ||w - w_global||^2
+                param_diff = current_params[key] - self.global_params[key]
+                fedprox_term += torch.sum(param_diff ** 2)
+
+        return (self.fedprox_mu / 2.0) * fedprox_term

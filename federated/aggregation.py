@@ -194,6 +194,10 @@ def get_aggregator(aggregation_method: str, **kwargs):
         return WeightedFedAvgAggregator()
     elif aggregation_method.lower() == 'lora_fedavg':
         return LoRAFedAvgAggregator()
+    elif aggregation_method.lower() == 'lora_fedprox':  # 新增: LoRA版本的FedProx
+        return LoRAFedAvgAggregator()  # FedProx聚合阶段与LoRA FedAvg相同
+    elif aggregation_method.lower() == 'fedprox':  # 保留非LoRA版本
+        return FedAvgAggregator()
     elif aggregation_method.lower() == 'enhanced_multi_dim_llm':
         from .enhanced_multi_dimensional_llm_aggregator import EnhancedMultiDimensionalLLMAggregator
 

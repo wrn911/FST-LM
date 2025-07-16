@@ -106,48 +106,72 @@ class Model(nn.Module):
         self._ensure_float32_layers()
 
     def _init_qwen3_model(self, configs):
-        """初始化Qwen3模型 - 修复版本"""
+        """初始化Qwen3模型 - 修复SSL问题"""
         try:
             from transformers import Qwen2Config, Qwen2Model, Qwen2Tokenizer
         except ImportError:
             print("警告: 请安装最新版transformers以支持Qwen3: pip install transformers>=4.37.0")
             raise
 
-        # Qwen3-0.6B的配置
-        self.qwen_config = Qwen2Config.from_pretrained('Qwen/Qwen3-0.6B')
+        # 方案1A: 强制使用本地文件
+        try:
+            # 首先尝试本地加载
+            self.qwen_config = Qwen2Config.from_pretrained(
+                'Qwen/Qwen3-0.6B',
+                local_files_only=True,  # 强制只使用本地文件
+                trust_remote_code=True
+            )
+            print("✓ 成功从本地加载Qwen3配置")
+        except Exception as e:
+            print(f"本地配置加载失败: {e}")
+            print("尝试创建默认配置...")
+
+            # 方案1B: 创建默认配置
+            self.qwen_config = Qwen2Config(
+                vocab_size=151936,
+                hidden_size=1024,
+                intermediate_size=2816,
+                num_hidden_layers=configs.llm_layers,
+                num_attention_heads=16,
+                num_key_value_heads=16,
+                max_position_embeddings=32768,
+                output_attentions=True,
+                output_hidden_states=True,
+                use_cache=True
+            )
+            print("✓ 使用默认Qwen3配置")
+
+        # 更新层数设置
         self.qwen_config.num_hidden_layers = configs.llm_layers
         self.qwen_config.output_attentions = True
         self.qwen_config.output_hidden_states = True
 
+        # 加载模型 - 强制本地
         try:
             self.llm_model = Qwen2Model.from_pretrained(
                 'Qwen/Qwen3-0.6B',
                 trust_remote_code=True,
-                local_files_only=True,
+                local_files_only=True,  # 强制本地
                 config=self.qwen_config,
             )
-        except EnvironmentError:
-            print("本地模型文件未找到，正在下载...")
-            self.llm_model = Qwen2Model.from_pretrained(
-                'Qwen/Qwen3-0.6B',
-                trust_remote_code=True,
-                local_files_only=False,
-                config=self.qwen_config,
-            )
+            print("✓ 成功从本地加载Qwen3模型")
+        except Exception as e:
+            print(f"❌ 本地模型加载失败: {e}")
+            print("请确保模型文件已正确下载到本地")
+            raise
 
+        # 加载tokenizer - 强制本地
         try:
             self.tokenizer = Qwen2Tokenizer.from_pretrained(
                 'Qwen/Qwen3-0.6B',
                 trust_remote_code=True,
-                local_files_only=True
+                local_files_only=True  # 强制本地
             )
-        except EnvironmentError:
-            print("本地tokenizer文件未找到，正在下载...")
-            self.tokenizer = Qwen2Tokenizer.from_pretrained(
-                'Qwen/Qwen3-0.6B',
-                trust_remote_code=True,
-                local_files_only=False
-            )
+            print("✓ 成功从本地加载Qwen3 tokenizer")
+        except Exception as e:
+            print(f"❌ 本地tokenizer加载失败: {e}")
+            print("请确保tokenizer文件已正确下载到本地")
+            raise
 
         # 更新配置中的LLM维度为实际值
         configs.llm_dim = self.llm_model.config.hidden_size

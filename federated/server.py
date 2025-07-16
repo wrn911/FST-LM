@@ -670,6 +670,10 @@ class FederatedServer:
             from utils.utils import assign_model_to_client, cleanup_client_model
             assign_model_to_client(client, None, global_params)
 
+            # 新增: 如果是FedProx (支持LoRA)，设置全局参数
+            if self.args.aggregation in ['fedprox', 'lora_fedprox']:
+                client.set_global_params_for_fedprox(global_params)
+
             # 本地训练
             local_loss = client.local_train()
 

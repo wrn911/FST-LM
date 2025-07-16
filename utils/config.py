@@ -107,9 +107,15 @@ def get_args():
 
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='enhanced_multi_dim_llm',
-                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg',
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'lora_fedprox',
                                  'layer_aware_llm', 'multi_dim_llm', 'enhanced_multi_dim_llm'],  # 新增选项
                         help='聚合算法')
+
+    # === FedProx参数 ===
+    parser.add_argument('--use_fedprox', action='store_true',
+                        help='是否使用FedProx算法')
+    parser.add_argument('--fedprox_mu', type=float, default=0.1,
+                        help='FedProx正则化参数μ')
 
     # === 增强版多维度LLM聚合参数 ===
     parser.add_argument('--enhanced_multi_dim_dimensions', type=str,

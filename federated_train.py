@@ -22,6 +22,10 @@ from federated.server import FederatedServer
 from torch.utils.data import DataLoader
 from utils.utils import assign_model_to_client, cleanup_client_model
 
+# 设置离线模式，防止自动联网
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 
 class ModelConfig:
     """TimeLLM模型配置类 - 修复版本"""
