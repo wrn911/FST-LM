@@ -107,9 +107,24 @@ def get_args():
 
     # === 聚合参数 ===
     parser.add_argument('--aggregation', type=str, default='enhanced_multi_dim_llm',
-                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'lora_fedprox',
+                        choices=['fedavg', 'weighted', 'lora_fedavg', 'llm_fedavg', 'lora_fedprox', 'fedatt', 'fedda',
                                  'layer_aware_llm', 'multi_dim_llm', 'enhanced_multi_dim_llm'],  # 新增选项
                         help='聚合算法')
+
+    # === FedAtt参数 ===
+    parser.add_argument('--fedatt_epsilon', type=float, default=1.0, help='FedAtt更新步长参数')
+
+    # === FedDA完整参数 ===
+    parser.add_argument('--fedda_clusters', type=int, default=3,
+                        help='FedDA聚类数量')
+    parser.add_argument('--fedda_rho', type=float, default=0.1,
+                        help='FedDA准全局模型权重')
+    parser.add_argument('--fedda_gamma', type=float, default=0.01,
+                        help='FedDA更新学习率')
+    parser.add_argument('--fedda_enable_augmentation', action='store_true',
+                        help='是否启用FedDA数据增强')
+    parser.add_argument('--fedda_augment_ratio', type=float, default=0.01,
+                        help='FedDA数据增强比例')
 
     # === FedProx参数 ===
     parser.add_argument('--use_fedprox', action='store_true',

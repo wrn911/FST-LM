@@ -44,6 +44,13 @@ class FederatedServer:
                 aggregator_kwargs['base_constraint'] = getattr(args, 'base_constraint', 0.25)
 
             self.aggregator = get_aggregator(args.aggregation, **aggregator_kwargs)
+        # 在创建聚合器时传入LoRA模式信息
+        elif args.aggregation == 'fedatt':
+            aggregator_kwargs = {
+                'fedatt_epsilon': getattr(args, 'fedatt_epsilon', 1.0),
+                'is_lora_mode': hasattr(args, 'use_lora') and args.use_lora  # 新增
+            }
+            self.aggregator = get_aggregator(args.aggregation, **aggregator_kwargs)
         else:
             self.aggregator = get_aggregator(args.aggregation)
 
@@ -110,6 +117,13 @@ class FederatedServer:
         elif self.args.aggregation == 'weighted':
             # 基于样本数量的加权聚合
             aggregated_model = self.aggregator.aggregate(client_models, client_info)
+        elif self.args.aggregation == 'fedda':
+            # 为FedDA传递联邦数据
+            aggregated_model = self.aggregator.aggregate(
+                client_models, client_info,
+                federated_data=getattr(self, 'federated_data', None),  # 需要在server初始化时保存
+                round_idx=round_idx
+            )
         else:
             # 标准FedAvg或LoRA聚合
             aggregated_model = self.aggregator.aggregate(client_models)

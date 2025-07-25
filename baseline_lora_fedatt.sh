@@ -1,13 +1,14 @@
 #!/bin/bash
 
-# FedAvg基线训练脚本（支持LoRA）
-echo "=== 启动FedAvg基线训练 ==="
+# LoRA版FedAtt基线训练脚本
+echo "=== 启动LoRA版FedAtt基线训练 ==="
 
 python federated_train.py \
     --use_lora \
     --lora_rank 16 \
     --lora_alpha 32 \
-    --aggregation lora_fedavg \
+    --aggregation fedatt \
+    --fedatt_epsilon 1.0 \
     --num_clients 50 \
     --rounds 20 \
     --local_epochs 5 \
@@ -28,7 +29,7 @@ python federated_train.py \
     --max_deviation_ratio 0.25 \
     --min_correlation_threshold 0.5 \
     --constraint_correction_weight 0.3 \
-    --device cuda:1 \
-    --save_dir result_baseline_lora_fedavg
+    --device cuda:3 \
+    --save_dir result_baseline_lora_fedatt
 
-echo "=== FedAvg基线训练完成 ==="
+echo "=== LoRA版FedAtt基线训练完成 ==="

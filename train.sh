@@ -26,7 +26,7 @@ python federated_train.py \
     --lora_target_modules q_proj,k_proj,v_proj,o_proj \
     --eval_every 1 \
     --save_checkpoint \
-    --checkpoint_interval 1 \
+    --checkpoint_interval 5 \
     --save_best_model \
     --enable_augmentation \
     --mixup_prob 0.2 \

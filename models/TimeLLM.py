@@ -113,7 +113,7 @@ class Model(nn.Module):
             print("警告: 请安装最新版transformers以支持Qwen3: pip install transformers>=4.37.0")
             raise
 
-        # 方案1A: 强制使用本地文件
+        # 强制使用本地文件
         try:
             # 首先尝试本地加载
             self.qwen_config = Qwen2Config.from_pretrained(
@@ -124,22 +124,7 @@ class Model(nn.Module):
             print("✓ 成功从本地加载Qwen3配置")
         except Exception as e:
             print(f"本地配置加载失败: {e}")
-            print("尝试创建默认配置...")
-
-            # 方案1B: 创建默认配置
-            self.qwen_config = Qwen2Config(
-                vocab_size=151936,
-                hidden_size=1024,
-                intermediate_size=2816,
-                num_hidden_layers=configs.llm_layers,
-                num_attention_heads=16,
-                num_key_value_heads=16,
-                max_position_embeddings=32768,
-                output_attentions=True,
-                output_hidden_states=True,
-                use_cache=True
-            )
-            print("✓ 使用默认Qwen3配置")
+            raise
 
         # 更新层数设置
         self.qwen_config.num_hidden_layers = configs.llm_layers

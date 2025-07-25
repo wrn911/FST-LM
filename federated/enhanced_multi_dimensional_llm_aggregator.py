@@ -11,6 +11,7 @@ import torch
 import logging
 import hashlib
 from .aggregation import FedAvgAggregator, LoRAFedAvgAggregator
+from .model_constraint import ModelParameterConstraint
 
 
 class ExpertOutputConfig:
@@ -110,7 +111,8 @@ class EnhancedMultiDimensionalLLMAggregator:
 
         # 新增：历史数据跟踪
         self.client_contribution_history = {}  # {client_id: 贡献度历史}
-        self.previous_weights = None  # 上一轮权重
+        self.model_constraint = ModelParameterConstraint(threshold=0.1)
+        self.previous_model_state = None  # 替换原来的 self.previous_weights
         self.round_history = []  # 轮次历史
         self.constraint_triggers = []  # 约束触发记录
 
@@ -141,7 +143,7 @@ class EnhancedMultiDimensionalLLMAggregator:
 
     def aggregate(self, client_models: List[Dict], client_info: List[Dict] = None,
                   client_stats: List = None, round_idx: int = 0):
-        """增强版多维度评分聚合 - 添加动态融合和约束机制"""
+        """增强版多维度评分聚合 - 添加动态融合和模型参数约束机制"""
 
         if not self.llm_client or not client_stats:
             print(f"\n⚠️  轮次 {round_idx}: 无LLM客户端或统计数据，使用备用聚合器")
@@ -150,36 +152,34 @@ class EnhancedMultiDimensionalLLMAggregator:
         try:
             print(f"\n🚀 启动增强版动态权重聚合 - 轮次 {round_idx}")
 
-            # === 第一步：LLM智能评分 ===
+            # === 第一步：LLM智能评分 ===（不变）
             dimension_scores = self._get_enhanced_dimension_scores(client_stats, round_idx)
             llm_weights = np.array(self._calculate_weighted_scores(dimension_scores))
             llm_weights = self._scores_to_weights(llm_weights)
 
-            # === 第二步：计算历史贡献度安全权重 ===
+            # === 第二步：计算历史贡献度安全权重 ===（不变）
             safe_weights = self.calculate_contribution_based_safe_weights(client_stats, round_idx)
 
-            # === 第三步：动态权重融合 ===
+            # === 第三步：动态权重融合 ===（不变）
             alpha = self.get_decay_factor(round_idx)
             fused_weights = alpha * np.array(llm_weights) + (1 - alpha) * safe_weights
 
-            # === 第四步：权重约束保护 ===
-            final_weights, constraint_info = self.constrain_weights(
-                fused_weights, self.previous_weights, round_idx
-            )
+            # === 第四步：执行聚合 ===（原第五步提前）
+            aggregated_model = self._weighted_aggregate(client_models, fused_weights)
 
-            # === 第五步：执行聚合 ===
-            result = self._weighted_aggregate(client_models, final_weights)
+            # === 第五步：模型参数约束保护 ===（替换原权重约束）
+            final_model, constraint_info = self.model_constraint.constrain_model_update(aggregated_model)
 
-            # === 第六步：更新历史记录 ===
-            self._update_client_history(client_stats, final_weights, round_idx)
-            self.previous_weights = final_weights
+            # === 第六步：更新历史记录 ===（改存储内容）
+            self._update_client_history(client_stats, fused_weights, round_idx)
+            self.previous_model_state = final_model
             self.constraint_triggers.append(constraint_info)
 
-            # === 第七步：输出决策信息 ===
+            # === 第七步：输出决策信息 ===（不变）
             self._log_enhanced_aggregation_info(round_idx, alpha, llm_weights,
-                                                safe_weights, final_weights, constraint_info)
+                                                safe_weights, fused_weights, constraint_info)
 
-            return result
+            return final_model
 
         except Exception as e:
             print(f"❌ 增强版聚合失败: {e}")
@@ -1080,56 +1080,6 @@ class EnhancedMultiDimensionalLLMAggregator:
         consistency = (correlation + 1) / 2  # 映射到[0,1]
         return consistency
 
-    def constrain_weights(self, fused_weights, reference_weights, round_idx):
-        """权重约束保护机制"""
-        if reference_weights is None:
-            return fused_weights, {'triggered': False, 'deviation': 0}
-
-        # 计算约束阈值
-        constraint_threshold = self._get_dynamic_constraint_threshold(round_idx)
-
-        # 计算偏离程度
-        weight_deviation = np.linalg.norm(fused_weights - reference_weights)
-
-        constraint_info = {
-            'deviation': weight_deviation,
-            'threshold': constraint_threshold,
-            'triggered': weight_deviation > constraint_threshold
-        }
-
-        if constraint_info['triggered']:
-            # 应用约束
-            direction = (fused_weights - reference_weights) / weight_deviation
-            constrained_weights = reference_weights + constraint_threshold * direction
-
-            # 重新标准化
-            constrained_weights = constrained_weights / np.sum(constrained_weights)
-            constrained_weights = np.maximum(constrained_weights, 0.0)
-            constrained_weights = constrained_weights / np.sum(constrained_weights)
-
-            constraint_info['adjustment'] = np.linalg.norm(constrained_weights - fused_weights)
-            return constrained_weights, constraint_info
-
-        return fused_weights, constraint_info
-
-    def _get_dynamic_constraint_threshold(self, round_idx):
-        """动态约束阈值"""
-        # 基础约束强度
-        base_strength = self.base_constraint
-
-        # 时间因子：后期约束更严格
-        time_factor = 0.5 + 0.5 * (round_idx / 100)
-
-        # 波动因子：基于最近性能波动
-        volatility_factor = 1.0
-        if len(self.round_history) >= 3:
-            recent_losses = [h.get('avg_loss', 1.0) for h in self.round_history[-3:]]
-            volatility = np.std(recent_losses) / (np.mean(recent_losses) + 1e-8)
-            volatility_factor = 1.0 + min(1.0, volatility)
-
-        threshold = base_strength * time_factor * volatility_factor
-        return np.clip(threshold, 0.1, 0.5)
-
     def _update_client_history(self, client_stats, final_weights, round_idx):
         """更新客户端历史记录"""
         for i, stats in enumerate(client_stats):
@@ -1180,13 +1130,15 @@ class EnhancedMultiDimensionalLLMAggregator:
         print(f"   🛡️  安全权重: {[f'{w:.3f}' for w in safe_weights]}")
         print(f"   ⚖️  最终权重: {[f'{w:.3f}' for w in final_weights]}")
 
-        if constraint_info['triggered']:
-            print(f"   ⚠️  约束触发: 偏离 {constraint_info['deviation']:.3f} > 阈值 {constraint_info['threshold']:.3f}")
-            print(f"   🔧 权重调整: {constraint_info.get('adjustment', 0):.3f}")
+        # 模型参数约束信息输出
+        if constraint_info.get('constrained', False):
+            deviation = constraint_info.get('deviation', 0)
+            print(f"   🔒 模型约束触发: 参数变化幅度 {deviation:.4f}")
+            print(f"   🔧 已应用参数缩放约束")
         else:
-            print(f"   ✅ 约束满足: 偏离 {constraint_info['deviation']:.3f} ≤ 阈值 {constraint_info['threshold']:.3f}")
+            print(f"   ✅ 模型参数变化在合理范围内")
 
-        # 权重分布分析
+        # 权重分布分析（保持不变）
         max_weight = max(final_weights)
         min_weight = min(final_weights)
         weight_entropy = -sum(w * np.log(w + 1e-10) for w in final_weights)

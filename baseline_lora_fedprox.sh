@@ -9,7 +9,7 @@ python federated_train.py \
     --lora_alpha 32 \
     --aggregation lora_fedprox \
     --use_fedprox \
-    --fedprox_mu 0.1 \
+    --fedprox_mu 1.0 \
     --num_clients 50 \
     --rounds 20 \
     --local_epochs 5 \
@@ -17,7 +17,7 @@ python federated_train.py \
     --lora_target_modules q_proj,k_proj,v_proj,o_proj \
     --eval_every 1 \
     --save_checkpoint \
-    --checkpoint_interval 1 \
+    --checkpoint_interval 5 \
     --save_best_model \
     --enable_augmentation \
     --mixup_prob 0.2 \

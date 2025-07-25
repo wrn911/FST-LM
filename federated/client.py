@@ -175,16 +175,14 @@ class FederatedClient:
     def set_global_params_for_fedprox(self, global_params):
         """设置全局模型参数用于FedProx正则化 - LoRA优化版本"""
         if self.use_fedprox:
-            if self.is_lora_mode:
-                # LoRA模式: 只存储可训练的LoRA参数
-                self.global_params = {}
-                for key, value in global_params.items():
-                    if self._is_lora_param(key):
-                        self.global_params[key] = value.clone().detach()
-                print(f"  FedProx存储了 {len(self.global_params)} 个LoRA参数用于正则化")
-            else:
-                # 标准模式: 存储所有参数
-                self.global_params = {k: v.clone().detach() for k, v in global_params.items()}
+            self.global_params = {}
+            # 直接存储参数张量，按参数名索引
+            for name, param in self.model.named_parameters():
+                if param.requires_grad:
+                    # 从state_dict中找到对应参数
+                    if name in global_params:
+                        self.global_params[name] = global_params[name].clone().detach().to(param.device)
+            print(f"  FedProx存储了 {len(self.global_params)} 个LoRA参数用于正则化")
 
     def _is_lora_param(self, param_name: str) -> bool:
         """判断参数是否为LoRA参数"""
@@ -192,23 +190,15 @@ class FederatedClient:
         return any(keyword in param_name for keyword in lora_keywords)
 
     def _compute_lora_fedprox_regularization(self):
-        """计算LoRA优化的FedProx正则化项 - 只对LoRA参数计算"""
         fedprox_term = 0.0
-
-        current_params = self.get_model_params()  # 获取当前可训练参数
-
-        for key in current_params:
-            if key in self.global_params:
-                # 计算 ||w_lora - w_global_lora||^2
-                param_diff = current_params[key] - self.global_params[key]
+        # 直接使用模型参数，不通过get_model_params()
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and name in self.global_params:
+                param_diff = param - self.global_params[name]
                 fedprox_term += torch.sum(param_diff ** 2)
 
-        # 由于只计算LoRA参数，可能需要调整μ值
-        effective_mu = self.fedprox_mu
-        if self.is_lora_mode:
-            # LoRA参数相对较少，可以适当增加正则化强度
-            effective_mu = self.fedprox_mu * 2.0
-
+        # LoRA模式使用更大的μ值
+        effective_mu = self.fedprox_mu * 2.0 if self.is_lora_mode else self.fedprox_mu
         return (effective_mu / 2.0) * fedprox_term
 
     def _compute_fedprox_regularization(self):
