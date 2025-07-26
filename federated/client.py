@@ -214,3 +214,51 @@ class FederatedClient:
                 fedprox_term += torch.sum(param_diff ** 2)
 
         return (self.fedprox_mu / 2.0) * fedprox_term
+
+    def evaluate_with_metrics(self, test_loader=None):
+        """评估模型并返回多个指标"""
+        if test_loader is None:
+            test_loader = self.data_loader
+
+        self.model.eval()
+        total_mse = 0
+        total_mae = 0
+        total_samples = 0
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                x, y = x.to(self.device), y.to(self.device)
+
+                x_enc = x.unsqueeze(-1)
+                y_true = y.unsqueeze(-1)
+
+                batch_size = x_enc.shape[0]
+                x_mark_enc = torch.zeros(batch_size, x_enc.shape[1], 4).to(self.device)
+                x_dec = torch.zeros(batch_size, self.args.pred_len, 1).to(self.device)
+                x_mark_dec = torch.zeros(batch_size, self.args.pred_len, 4).to(self.device)
+
+                outputs = self.model(x_enc, x_mark_enc, x_dec, x_mark_dec)
+
+                # 计算MSE和MAE
+                mse = torch.nn.functional.mse_loss(outputs, y_true, reduction='sum')
+                mae = torch.nn.functional.l1_loss(outputs, y_true, reduction='sum')
+
+                total_mse += mse.item()
+                total_mae += mae.item()
+                total_samples += batch_size * self.args.pred_len
+
+                # 清理中间变量
+                del x_enc, y_true, x_mark_enc, x_dec, x_mark_dec, outputs, mse, mae
+
+        # 清理GPU缓存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        avg_mse = total_mse / total_samples if total_samples > 0 else float('inf')
+        avg_mae = total_mae / total_samples if total_samples > 0 else float('inf')
+
+        return {
+            'mse': avg_mse,
+            'mae': avg_mae,
+            'loss': avg_mse  # 保持兼容性
+        }

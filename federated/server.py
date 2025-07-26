@@ -736,6 +736,7 @@ class FederatedServer:
 
         round_results = {
             'selected_clients': [c.client_id for c in selected_clients],
+            'selected_client_objects': selected_clients,  # 新增：返回客户端对象
             'avg_client_loss': avg_client_loss,
             'client_losses': dict(zip([c.client_id for c in selected_clients], client_losses))
         }
@@ -764,6 +765,74 @@ class FederatedServer:
     def get_train_history(self):
         """获取训练历史"""
         return copy.deepcopy(self.train_history)
+
+    def evaluate_global_model_with_metrics(self, test_clients: List, eval_type='test'):
+        """
+        详细评估全局模型性能，返回MSE和MAE
+
+        Args:
+            test_clients: 测试客户端列表
+            eval_type: 评估类型 ('val' 或 'test')
+
+        Returns:
+            metrics: 包含MSE、MAE等指标的字典
+            client_metrics: 各客户端详细指标
+        """
+        total_mse = 0
+        total_mae = 0
+        total_samples = 0
+        client_metrics = {}
+
+        # 获取全局模型参数
+        global_params = self.get_global_model()
+
+        for client in test_clients:
+            # 设置全局模型参数
+            from utils.utils import assign_model_to_client, cleanup_client_model
+            assign_model_to_client(client, None, global_params)
+
+            # 根据评估类型选择数据加载器
+            if eval_type == 'val' and hasattr(client, 'val_loader'):
+                eval_loader = client.val_loader
+            elif eval_type == 'test' and hasattr(client, 'test_loader'):
+                eval_loader = client.test_loader
+            else:
+                eval_loader = client.data_loader  # 默认使用训练数据
+
+            # 评估客户端
+            client_result = client.evaluate_with_metrics(eval_loader)
+            client_samples = len(eval_loader.dataset)
+
+            # 累计指标
+            total_mse += client_result['mse'] * client_samples
+            total_mae += client_result['mae'] * client_samples
+            total_samples += client_samples
+
+            client_metrics[client.client_id] = {
+                'mse': client_result['mse'],
+                'mae': client_result['mae'],
+                'samples': client_samples
+            }
+
+            # 清理客户端模型
+            cleanup_client_model(client)
+
+        # 计算平均指标
+        avg_mse = total_mse / total_samples if total_samples > 0 else float('inf')
+        avg_mae = total_mae / total_samples if total_samples > 0 else float('inf')
+
+        # 清理全局参数
+        del global_params
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        metrics = {
+            'mse': avg_mse,
+            'mae': avg_mae,
+            'total_samples': total_samples
+        }
+
+        return metrics, client_metrics
 
 # 客户端统计信息类（简化版）
 class ClientStatistics:

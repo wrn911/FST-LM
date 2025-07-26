@@ -149,6 +149,34 @@ def create_federated_clients(federated_data, client_loaders, args):
 
     return clients
 
+def generate_method_name(args):
+    """生成清晰的方法名称"""
+    aggregation_map = {
+        'lora_fedavg': 'FedAvg',
+        'lora_fedprox': 'FedProx',
+        'fedatt': 'FedAtt',
+        'fedda': 'FedDA',
+        'enhanced_multi_dim_llm': 'FSTLM'
+    }
+
+    base_name = aggregation_map.get(args.aggregation, args.aggregation)
+
+    suffixes = []
+    if args.use_lora:
+        suffixes.append('LoRA')
+    if args.enable_augmentation:
+        suffixes.append('Aug')
+
+    if suffixes:
+        return f"{base_name}+{'+'.join(suffixes)}"
+    else:
+        return base_name
+
+
+def generate_dataset_name(args):
+    """生成完整的数据集名称"""
+    base_name = os.path.splitext(args.file_path)[0]
+    return f"{base_name}_{args.data_type}"
 
 def main():
     """主函数"""
@@ -160,11 +188,22 @@ def main():
 
     print("=== 联邦学习训练 ===")
     print(f"设备: {args.device}")
+    print(f"数据集: {args.file_path} ({args.data_type})")
     print(f"客户端数量: {args.num_clients}")
     print(f"参与比例: {args.frac}")
     print(f"总轮数: {args.rounds}")
     print(f"本地训练轮数: {args.local_epochs}")
     print(f"聚合算法: {args.aggregation}")
+
+    # 初始化结果保存器 - 使用新的命名函数
+    from utils.results_saver import ResultsSaver
+    dataset_name = generate_dataset_name(args)
+    method_name = generate_method_name(args)
+
+    results_saver = ResultsSaver(args.save_dir, dataset_name)
+    print(f"数据集: {dataset_name}")
+    print(f"方法: {method_name}")
+    print(f"结果将保存至: {results_saver.csv_file}")
 
     # 加载联邦数据
     print("\n加载联邦数据...")
@@ -234,6 +273,9 @@ def main():
         # 执行一轮联邦学习
         round_results = server.federated_round(clients, round_idx)
 
+        # 获取本轮选中的客户端
+        selected_clients = round_results.get('selected_client_objects', [])
+
         # 输出本轮结果（增强版）
         avg_loss = round_results['avg_client_loss']
         print(f"本轮平均客户端损失: {avg_loss:.6f}")
@@ -246,25 +288,38 @@ def main():
         if round_idx % args.eval_every == 0:
             print("进行全局模型评估...")
 
-            eval_clients = clients[:min(10, len(clients))]  # 增加评估客户端数量
+            eval_clients = selected_clients[:min(10, len(selected_clients))] if selected_clients else clients[:min(10, len(clients))]
 
-            # 验证集评估
+            # 验证集评估（带MSE和MAE）
+            val_metrics = None
             if hasattr(eval_clients[0], 'val_loader'):
-                val_loss, val_client_losses = server.evaluate_global_model_detailed(eval_clients, 'val')
-                server.train_history['global_loss'].append(val_loss)
-                print(f"全局验证损失: {val_loss:.6f}")
+                val_metrics, val_client_metrics = server.evaluate_global_model_with_metrics(eval_clients, 'val')
+                server.train_history['global_loss'].append(val_metrics['mse'])  # 保持兼容性
+                print(f"全局验证性能: MSE={val_metrics['mse']:.6f}, MAE={val_metrics['mae']:.6f}")
 
                 # 保存最优模型
-                if args.save_best_model and val_loss < best_val_loss:
-                    best_val_loss = val_loss
+                if args.save_best_model and val_metrics['mse'] < best_val_loss:
+                    best_val_loss = val_metrics['mse']
                     best_model_path = f"{args.save_dir}/best_model.pth"
-                    server.save_best_model(best_model_path, val_loss, round_idx)
-                    print(f"🎯 发现更优模型！验证损失: {val_loss:.6f}")
+                    server.save_best_model(best_model_path, val_metrics['mse'], round_idx)
+                    print(f"🎯 发现更优模型！验证MSE: {val_metrics['mse']:.6f}")
 
-            # 如果也想看测试集表现（可选，但不用于模型选择）
-            if hasattr(eval_clients[0], 'test_loader') and round_idx % (args.eval_every * 2) == 0:
-                test_loss, _ = server.evaluate_global_model_detailed(eval_clients, 'test')
-                print(f"当前测试损失: {test_loss:.6f} (仅供参考)")
+            # 测试集评估（每轮都做，用于保存结果）
+            test_metrics = None
+            if hasattr(eval_clients[0], 'test_loader'):
+                test_metrics, test_client_metrics = server.evaluate_global_model_with_metrics(eval_clients, 'test')
+                print(f"测试集性能: MSE={test_metrics['mse']:.6f}, MAE={test_metrics['mae']:.6f}")
+
+            # 保存本轮结果
+            results_saver.save_round_results(
+                round_idx=round_idx,
+                test_metrics=test_metrics,
+                val_metrics=val_metrics,
+                train_loss=avg_loss,
+                method_name=method_name,
+                num_clients=len(selected_clients) if selected_clients else args.num_clients,
+                aggregation=args.aggregation
+            )
 
         # 保存检查点
         if args.save_checkpoint and round_idx % args.checkpoint_interval == 0:
@@ -279,9 +334,20 @@ def main():
 
     print("\n联邦训练完成!")
 
-    # 最终测试集评估（如果已实现）
-    if hasattr(server, 'final_test_evaluation'):
-        final_results = server.final_test_evaluation(clients)
+    # 最终测试集评估
+    print("\n=== 最终测试集评估 ===")
+    final_test_metrics, final_test_client_metrics = server.evaluate_global_model_with_metrics(clients, 'test')
+    print(f"最终测试性能: MSE={final_test_metrics['mse']:.6f}, MAE={final_test_metrics['mae']:.6f}")
+
+    # 保存最终结果
+    additional_info = {
+        'final_test_metrics': final_test_metrics,
+        'final_test_client_metrics': final_test_client_metrics,
+        'best_val_loss': best_val_loss,
+        'args': vars(args)
+    }
+
+    final_results = results_saver.save_final_results(additional_info)
 
     # 输出训练摘要
     train_history = server.get_train_history()
@@ -294,29 +360,28 @@ def main():
     final_client_loss = train_history['client_losses'][-1] if train_history['client_losses'] else float('inf')
     print(f"最终平均客户端训练损失: {final_client_loss:.6f}")
 
-    # 验证损失
-    if 'val_losses' in train_history and train_history['val_losses']:
-        final_val_loss = train_history['val_losses'][-1]
-        print(f"最佳验证损失: {best_val_loss:.6f}")
-        print(f"最终验证损失: {final_val_loss:.6f}")
+    # 最终性能指标
+    print(f"最终测试MSE: {final_test_metrics['mse']:.6f}")
+    print(f"最终测试MAE: {final_test_metrics['mae']:.6f}")
 
-    # 全局评估损失
-    if train_history['global_loss']:
-        best_global_loss = min(train_history['global_loss'])
-        print(f"最佳全局损失: {best_global_loss:.6f}")
+    # 最佳性能
+    summary = final_results['summary']
+    if 'best_test_mse' in summary:
+        print(f"最佳测试MSE: {summary['best_test_mse']:.6f}")
+        print(f"最佳测试MAE: {summary['best_test_mae']:.6f}")
 
     # 模型保存摘要
     if args.save_best_model:
         print(f"\n📁 模型保存信息:")
         print(f"   最优模型: {args.save_dir}/best_model.pth")
-        print(f"   最优验证损失: {best_val_loss:.6f}")
+        print(f"   最优验证MSE: {best_val_loss:.6f}")
 
     if args.save_checkpoint:
         print(f"   最终检查点: {args.save_dir}/final_checkpoint.pth")
         print(f"   检查点保存间隔: 每 {args.checkpoint_interval} 轮")
 
     # 如果使用多维度LLM聚合，生成趋势分析
-    if args.aggregation == 'multi_dim_llm':
+    if args.aggregation in ['multi_dim_llm', 'enhanced_multi_dim_llm']:
         print(f"\n{'=' * 60}")
         print("客户端学习趋势分析")
         print(f"{'=' * 60}")
@@ -336,27 +401,11 @@ def main():
                     print(f"  客户端 {client_id}: {trend_summary['description']} (评分: {trend_summary['score']:.2f})")
 
     # 保存详细结果
-    if hasattr(args, 'save_results') and args.save_results:
-        import json
-        results_to_save = {
-            'train_history': train_history,
-            'args': vars(args)
-        }
-
-        # 添加趋势分析结果
-        if args.aggregation == 'multi_dim_llm' and hasattr(server, 'client_history'):
-            results_to_save['client_trends'] = {}
-            for client_id in server.client_history['losses'].keys():
-                trend_summary = server.get_client_trend_summary(client_id)
-                results_to_save['client_trends'][client_id] = trend_summary
-
-        # 添加最终测试结果
-        if 'final_results' in locals():
-            results_to_save['final_test_results'] = final_results
-
-        with open(f"{args.save_dir}/training_results.json", 'w') as f:
-            json.dump(results_to_save, f, indent=2, default=str)
-        print(f"详细结果已保存至: {args.save_dir}/training_results.json")
+    print(f"\n=== 结果已保存 ===")
+    print(f"CSV结果: {results_saver.csv_file}")
+    print(f"详细结果: {results_saver.json_file}")
+    print("可以运行以下命令分析结果:")
+    print(f"python analyze_results.py --dataset {dataset_name}")
 
 
 if __name__ == "__main__":
